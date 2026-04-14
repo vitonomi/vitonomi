@@ -1,0 +1,55 @@
+{
+  "name": "vitonomi",
+  "version": "0.0.0",
+  "private": true,
+  "description": "vitonomi — privacy-first, pay-once photo storage on Autonomi",
+  "license": "BUSL-1.1",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "workspaces": [
+    "core",
+    "cli",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc -b --pretty",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "spec:lint": "spectral lint docs/api-spec.yaml",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,cjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,yaml,yml,md}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "@stoplight/spectral-cli": "^6.11.1",
+    "@types/node": "^22.7.4",
+    "@typescript-eslint/eslint-plugin": "^8.8.0",
+    "@typescript-eslint/parser": "^8.8.0",
+    "@vitest/coverage-v8": "^2.1.2",
+    "eslint": "^9.12.0",
+    "eslint-plugin-import": "^2.31.0",
+    "globals": "^15.10.0",
+    "husky": "^9.1.6",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "typescript-eslint": "^8.8.0",
+    "vitest": "^2.1.2"
+  }
+}

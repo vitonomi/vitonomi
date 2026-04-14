@@ -1,0 +1,17 @@
+{
+  "name": "@vitonomi/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "vitonomi web app — Next.js (BSL 1.1). Full scaffold lands in Phase 6.",
+  "license": "BUSL-1.1",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vitonomi/core": "*"
+  }
+}

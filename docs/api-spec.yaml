@@ -1,0 +1,75 @@
+openapi: 3.1.0
+info:
+  title: vitonomi cloud API
+  version: 0.0.0-phase0
+  description: |
+    The single contract between the public web app and the private cloud
+    backend. The cloud is zero-knowledge: every encrypted blob it stores is
+    opaque, and every key shipped over this API is the auth-derived key from
+    Argon2id, never a raw password.
+
+    This file is the placeholder skeleton committed in Phase 0. Real endpoints
+    are added in Phase 5 (auth, key blob), Phase 7 (uploads, classify),
+    Phase 8 (sharing), and Phase 9 (credits, pricing).
+  license:
+    name: BUSL-1.1
+    url: https://mariadb.com/bsl11/
+  contact:
+    name: vitonomi
+    url: https://github.com/vitonomi/vitonomi
+
+servers:
+  - url: https://api.vitonomi.com
+    description: production
+  - url: http://localhost:8787
+    description: local dev
+
+tags:
+  - name: meta
+    description: Health and version probes.
+
+paths:
+  /health:
+    get:
+      tags: [meta]
+      operationId: getHealth
+      summary: Liveness probe
+      description: Returns 200 if the API process is running. No auth required.
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+          description: Build version of the cloud API.
+    Error:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          description: Human-readable message — never includes user content.
+        code:
+          type: string
+          description: Machine-readable error code, stable across versions.
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-session-token
+      description: |
+        Session token issued after a successful login. The login request
+        carries the auth-derived key (Argon2id output), never the raw password.

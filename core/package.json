@@ -1,0 +1,29 @@
+{
+  "name": "@vitonomi/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "vitonomi shared library — crypto, storage, types (client-side, BSL 1.1)",
+  "license": "BUSL-1.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./logging": {
+      "types": "./dist/logging.d.ts",
+      "import": "./dist/logging.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit"
+  }
+}

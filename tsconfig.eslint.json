@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "allowJs": true
+  },
+  "include": [
+    "core/src/**/*.ts",
+    "core/tests/**/*.ts",
+    "cli/src/**/*.ts",
+    "cli/tests/**/*.ts",
+    "web/src/**/*.ts",
+    "web/src/**/*.tsx",
+    "web/tests/**/*.ts",
+    "web/tests/**/*.tsx",
+    "vitest.config.ts",
+    "eslint.config.js"
+  ],
+  "exclude": ["**/dist/**", "**/node_modules/**"]
+}

@@ -1,0 +1,9 @@
+extends:
+  - spectral:oas
+rules:
+  # Operation summary is enough for MVP; descriptions added as endpoints land.
+  operation-description: warn
+  # Tags are useful but not enforced until the spec covers more surface area.
+  operation-tag-defined: warn
+  # Examples are nice-to-have at this stage.
+  oas3-valid-media-example: warn
