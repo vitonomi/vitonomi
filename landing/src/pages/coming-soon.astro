@@ -1,0 +1,24 @@
+---
+import Hero from '../components/Hero.astro';
+import Base from '../layouts/Base.astro';
+import { SITE, type PageMeta } from '../config';
+
+// Temporary holding page served at vitonomi.app until the Next.js web app
+// ships in Phase 6. Excluded from the sitemap via astro.config.mjs.
+const meta: PageMeta = {
+  title: 'vitonomi.app — coming soon',
+  description: 'The vitonomi web app is coming soon. Read the principles on vitonomi.com.',
+  path: '/coming-soon',
+  noindex: true,
+};
+---
+
+<Base meta={meta}>
+  <Hero
+    eyebrow="Preview"
+    title="vitonomi.app is coming."
+    subtitle="The web app is in active development. In the meantime, read how vitonomi works and why it exists on vitonomi.com."
+    primaryCta={{ label: 'Read the principles', href: SITE.domain }}
+    secondaryCta={{ label: 'Follow development on GitHub', href: SITE.repoUrl }}
+  />
+</Base>

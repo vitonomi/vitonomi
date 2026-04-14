@@ -1,0 +1,78 @@
+---
+interface Step {
+  readonly title: string;
+  readonly body: string;
+}
+
+interface Props {
+  readonly steps: readonly Step[];
+}
+
+const { steps } = Astro.props;
+---
+
+<ol class="steps">
+  {
+    steps.map((step, i) => (
+      <li class="step">
+        <span class="step__index" aria-hidden="true">
+          {String(i + 1).padStart(2, '0')}
+        </span>
+        <div class="step__body">
+          <h3 class="step__title">{step.title}</h3>
+          <p class="step__text">{step.body}</p>
+        </div>
+      </li>
+    ))
+  }
+</ol>
+
+<style>
+  .steps {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 0;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 5rem 1fr;
+    gap: clamp(1rem, 2vw, 2rem);
+    padding: 1.75rem 0;
+    border-top: 1px solid var(--border);
+    align-items: baseline;
+  }
+  .step:last-child {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .step__index {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    padding-top: 0.2rem;
+  }
+
+  .step__title {
+    margin: 0 0 0.4rem;
+    font-size: 1.15rem;
+    font-weight: 600;
+  }
+
+  .step__text {
+    margin: 0;
+    color: var(--text-muted);
+    line-height: 1.55;
+    max-width: 48rem;
+  }
+
+  @media (max-width: 600px) {
+    .step {
+      grid-template-columns: 1fr;
+      gap: 0.5rem;
+    }
+  }
+</style>

@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /coming-soon
+
+Sitemap: https://vitonomi.com/sitemap-index.xml

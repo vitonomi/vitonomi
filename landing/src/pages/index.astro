@@ -1,0 +1,141 @@
+---
+import FeatureGrid from '../components/FeatureGrid.astro';
+import Hero from '../components/Hero.astro';
+import Statement from '../components/Statement.astro';
+import Steps from '../components/Steps.astro';
+import Base from '../layouts/Base.astro';
+import { SITE, type PageMeta } from '../config';
+
+const meta: PageMeta = {
+  title: 'vitonomi — private photo storage. Paid once. Yours forever.',
+  description: SITE.defaultDescription,
+  path: '/',
+};
+
+const principles = [
+  {
+    title: 'Paid once',
+    body: 'A single payment stores your photos on the Autonomi network forever. No monthly bills, no renewals, no egress fees.',
+  },
+  {
+    title: 'Zero-knowledge',
+    body: 'Photos are self-encrypted on your device before they leave it. Our servers never see plaintext, metadata, or encryption keys.',
+  },
+  {
+    title: 'Post-quantum',
+    body: 'Every asymmetric key is ML-DSA-65 and ML-KEM-768 — matching Autonomi 2.0, end to end.',
+  },
+  {
+    title: 'Open source',
+    body: 'The core library is source-available under BSL 1.1 and converts to Apache 2.0 after four years.',
+  },
+];
+
+const steps = [
+  {
+    title: 'Upload',
+    body: 'Your photos are chunked and self-encrypted in your browser. Only encrypted chunks and a data map ever leave your device.',
+  },
+  {
+    title: 'Store',
+    body: 'Encrypted chunks go to the Autonomi network — content-addressed, paid once, mirrored across independent nodes.',
+  },
+  {
+    title: 'Tag',
+    body: 'Confidential AI classification runs inside a hardware TEE. Tags like “mountains” or “sunset” are signed and added to an encrypted index.',
+  },
+  {
+    title: 'Recover',
+    body: 'Lose your device? Recover the whole library from a seed phrase using the open-source CLI. No vendor required.',
+  },
+];
+---
+
+<Base meta={meta}>
+  <Hero
+    title="Your photos belong to you!"
+    titleHtml={`Your photos belong to <span class="accent">you</span>!`}
+    subtitle="Pay once to store your library on the Autonomi network. Self-encrypted on your device. Post-quantum secure. Open source."
+    primaryCta={{ label: 'Open vitonomi', href: SITE.appUrl }}
+    secondaryCta={{ label: 'How it works', href: '#how-it-works' }}
+  />
+
+  <section>
+    <div class="container">
+      <p class="eyebrow">Principles</p>
+      <h2>What we will not do with your photos.</h2>
+      <p class="lede">
+        vitonomi is the answer to a simple question: what would photo storage look like if the
+        company couldn’t read your photos, couldn’t hold your data hostage, and couldn’t raise its
+        prices every year?
+      </p>
+      <div class="principles">
+        <FeatureGrid features={principles} columns={4} />
+      </div>
+    </div>
+  </section>
+
+  <section id="how-it-works" class="alt">
+    <div class="container">
+      <p class="eyebrow">How it works</p>
+      <h2>Four steps. Zero plaintext on our side.</h2>
+      <div class="how">
+        <Steps steps={steps} />
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <Statement
+        text="Our servers never see your photos. Not the bytes. Not the tags. Not the keys."
+        caption="Dual-key Argon2id, client-side self-encryption via Autonomi, and confidential AI inside a hardware TEE. Every asymmetric operation is post-quantum secure."
+      />
+      <div class="actions">
+        <a class="cta cta--ghost" href="/privacy">Read the security details</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="container">
+      <p class="eyebrow">Open source, self-host first</p>
+      <div class="open-source">
+        <h2>Run it yourself. Keep every key.</h2>
+        <p class="lede">
+          Every feature in vitonomi ships a self-hosted code path. Fork the repo, install the CLI,
+          pay ANT directly, and store your library without our infrastructure.
+        </p>
+        <div class="actions">
+          <a class="cta" href="/self-hosting">Learn about self-hosting</a>
+          <a class="cta cta--ghost" href={SITE.repoUrl} rel="noopener noreferrer">
+            Browse the source
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tight">
+    <div class="container">
+      <p class="eyebrow">Start today</p>
+      <h2>Your photos, paid once, yours forever.</h2>
+      <div class="actions">
+        <a class="cta" href={SITE.appUrl}>Open vitonomi</a>
+        <a class="cta cta--ghost" href="/self-hosting">Or self-host</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .principles {
+    margin-top: clamp(2.5rem, 4vw, 3.5rem);
+  }
+  .how {
+    margin-top: clamp(2rem, 3vw, 3rem);
+  }
+  .open-source h2 {
+    max-width: 20ch;
+  }
+</style>

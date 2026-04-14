@@ -1,0 +1,151 @@
+---
+import { SITE } from '../config';
+
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+  <div class="container site-footer__grid">
+    <div class="site-footer__brand">
+      <img
+        src={SITE.signetPath}
+        alt=""
+        width="120"
+        height="96"
+        loading="lazy"
+        decoding="async"
+        class="site-footer__signet"
+      />
+      <p class="site-footer__tag">
+        Private photo storage.<br />
+        Paid once. Yours forever.
+      </p>
+    </div>
+
+    <div class="site-footer__cols" aria-label="Footer navigation">
+      <div>
+        <h4>Product</h4>
+        <ul>
+          <li><a href={SITE.appUrl}>Open app</a></li>
+          <li><a href="/self-hosting">Self-hosting</a></li>
+          <li><a href="/privacy">Privacy &amp; security</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Open source</h4>
+        <ul>
+          <li><a href={SITE.repoUrl} rel="noopener noreferrer">GitHub</a></li>
+          <li>
+            <a href={`${SITE.docsBaseUrl}`} rel="noopener noreferrer">Docs</a>
+          </li>
+          <li>
+            <a href="https://mariadb.com/bsl11/" rel="noopener noreferrer">BSL 1.1 license</a>
+          </li>
+        </ul>
+      </div>
+      <div>
+        <h4>Company</h4>
+        <ul>
+          <li><a href="mailto:hello@vitonomi.com">Contact</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="container site-footer__legal">
+    <span>© {year} {SITE.name}.</span>
+    <span>
+      Source available under <a href="https://mariadb.com/bsl11/" rel="noopener noreferrer"
+        >BSL 1.1</a
+      >, converting to Apache 2.0 in four years.
+    </span>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--border);
+    padding: 4rem 0 2rem;
+    margin-top: 4rem;
+    background: var(--bg);
+  }
+
+  .site-footer__grid {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 3rem;
+    align-items: start;
+  }
+
+  .site-footer__brand {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .site-footer__signet {
+    height: 44px;
+    width: auto;
+  }
+
+  .site-footer__tag {
+    color: var(--text-muted);
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .site-footer__cols {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 2rem;
+  }
+
+  .site-footer__cols h4 {
+    margin: 0 0 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .site-footer__cols ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .site-footer__cols a {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.95rem;
+  }
+  .site-footer__cols a:hover,
+  .site-footer__cols a:focus-visible {
+    text-decoration: underline;
+    text-underline-offset: 4px;
+  }
+
+  .site-footer__legal {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1.25rem;
+    padding-top: 3rem;
+    margin-top: 3rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }
+
+  @media (max-width: 720px) {
+    .site-footer__grid {
+      grid-template-columns: 1fr;
+      gap: 2rem;
+    }
+    .site-footer__cols {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1.5rem;
+    }
+  }
+</style>

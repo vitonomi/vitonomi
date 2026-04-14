@@ -1,0 +1,49 @@
+---
+import { SITE, absoluteUrl, canonicalUrl } from '../config';
+
+interface Props {
+  readonly path: string;
+  readonly includeBreadcrumb?: boolean;
+  readonly breadcrumbName?: string;
+}
+
+const { path, includeBreadcrumb = false, breadcrumbName } = Astro.props;
+
+const organization = {
+  '@context': 'https://schema.org',
+  '@type': 'Organization',
+  name: SITE.name,
+  url: SITE.domain,
+  logo: absoluteUrl(SITE.logoPath),
+  sameAs: [SITE.repoUrl],
+  description: SITE.defaultDescription,
+};
+
+const website = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: SITE.name,
+  url: SITE.domain,
+  inLanguage: SITE.locale,
+};
+
+const breadcrumb =
+  includeBreadcrumb && breadcrumbName
+    ? {
+        '@context': 'https://schema.org',
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: 'Home', item: SITE.domain },
+          { '@type': 'ListItem', position: 2, name: breadcrumbName, item: canonicalUrl(path) },
+        ],
+      }
+    : null;
+---
+
+<script is:inline type="application/ld+json" set:html={JSON.stringify(organization)} />
+<script is:inline type="application/ld+json" set:html={JSON.stringify(website)} />
+{
+  breadcrumb && (
+    <script is:inline type="application/ld+json" set:html={JSON.stringify(breadcrumb)} />
+  )
+}

@@ -1,0 +1,122 @@
+---
+import { SITE } from '../config';
+---
+
+<header class="site-header">
+  <div class="container site-header__row">
+    <a class="site-header__brand" href="/" aria-label={`${SITE.name} home`}>
+      <img
+        src={SITE.logoPath}
+        alt="vitonomi"
+        width="920"
+        height="256"
+        loading="eager"
+        decoding="async"
+        class="site-header__logo"
+      />
+    </a>
+    <nav aria-label="Primary">
+      <ul class="site-header__nav">
+        <li><a href="/self-hosting">Self-hosting</a></li>
+        <li><a href="/privacy">Privacy</a></li>
+        <li>
+          <a href={SITE.repoUrl} rel="noopener noreferrer">GitHub</a>
+        </li>
+      </ul>
+    </nav>
+    <a class="site-header__cta" href={SITE.appUrl}>Open app</a>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .site-header__row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 2rem;
+    height: 72px;
+  }
+
+  .site-header__brand {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+  }
+  .site-header__brand:hover {
+    text-decoration: none;
+  }
+
+  .site-header__logo {
+    height: 28px;
+    width: auto;
+  }
+
+  .site-header__nav {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+  }
+
+  .site-header__nav a {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.95rem;
+    font-weight: 500;
+    opacity: 0.72;
+    transition: opacity 0.15s ease;
+  }
+  .site-header__nav a:hover,
+  .site-header__nav a:focus-visible {
+    opacity: 1;
+  }
+
+  .site-header__cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.55rem 1rem;
+    border-radius: var(--radius);
+    background: var(--brand);
+    color: var(--brand-contrast);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.92rem;
+    line-height: 1;
+    border: 1px solid var(--brand);
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+  }
+  .site-header__cta:hover,
+  .site-header__cta:focus-visible {
+    background: var(--brand-hover);
+    border-color: var(--brand-hover);
+    color: var(--brand-contrast);
+    text-decoration: none;
+  }
+
+  @media (max-width: 720px) {
+    .site-header__row {
+      grid-template-columns: auto 1fr auto;
+      gap: 1rem;
+      height: 64px;
+    }
+    .site-header__nav {
+      display: none;
+    }
+    .site-header__logo {
+      height: 24px;
+    }
+  }
+</style>

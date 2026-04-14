@@ -1,6 +1,6 @@
 # vitonomi monorepo strategy
 
-The public repo (`vitonomi/`) uses **npm workspaces** to host three packages
+The public repo (`vitonomi/`) uses **npm workspaces** to host four packages
 that share a single dependency tree, single TypeScript baseline, and single
 test runner:
 
@@ -14,7 +14,8 @@ vitonomi/
 ├── vitest.config.ts        ← root config; per-package configs extend it
 ├── core/                   ← @vitonomi/core — shared library (crypto, storage, types)
 ├── web/                    ← @vitonomi/web — Next.js app (hosted + self-hosted)
-└── cli/                    ← @vitonomi/cli — recovery + upload tool
+├── cli/                    ← @vitonomi/cli — recovery + upload tool
+└── landing/                ← @vitonomi/landing — Astro SSG (vitonomi.com)
 ```
 
 ## Why npm workspaces (and not pnpm/turbo/nx)
@@ -42,6 +43,30 @@ do not need to be consumed by anything else in this repo.
   upload, recover, export, import, and the `storage smoke` integration command.
 - **`web/`** — Next.js app. Imports `core/` and the OpenAPI-generated client.
   Holds React components, route handlers, runtime config loader.
+- **`landing/`** — Astro SSG for `vitonomi.com`. Zero dependency on `core/`.
+  Pure static marketing + SEO content, deployed independently from the app.
+
+## Deploying two Vercel projects from one repo
+
+`landing/` and `web/` deploy to different domains (`vitonomi.com` and
+`vitonomi.app`) from the same GitHub repo. The setup:
+
+- Two Vercel projects, both linked to the same repo.
+- Each project sets **Root Directory** to its own package (`landing` or
+  `web`). Vercel resolves install/build inside that directory.
+- Install + build commands `cd` up to the repo root so npm workspaces
+  resolve correctly, then run the workspace-scoped build
+  (`npm run build -w @vitonomi/landing` / `-w @vitonomi/web`).
+- Each project configures an "Ignored Build Step" that skips the deploy
+  when only the other package changed. Example for landing:
+  `git diff --quiet HEAD^ HEAD -- ../landing ../package.json` returns
+  non-zero (i.e., build) only when landing-relevant files moved.
+- Production domains, preview URLs, and deploy protection are configured
+  independently per project.
+
+The two packages share no code. ESLint ignores `.astro` files (Astro runs
+its own type check via `astro check`). Prettier formats `.astro` via
+`prettier-plugin-astro`.
 
 ## What does **not** live in this repo
 

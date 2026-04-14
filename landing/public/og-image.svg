@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="vitonomi — private photo storage. Paid once. Yours forever.">
+  <rect width="1200" height="630" fill="#ffffff" />
+
+  <!-- signet: V with attached right-facing triangle, mirrors the brand mark -->
+  <g transform="translate(120 190)" fill="#0a0a0a">
+    <path d="M0 0 H64 L100 150 L136 0 H200 L132 250 H68 Z" />
+    <path d="M220 30 L460 125 A15 15 0 0 1 460 150 L220 245 A10 10 0 0 1 205 238 V37 A10 10 0 0 1 220 30 Z" />
+  </g>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Inter, sans-serif" fill="#0a0a0a">
+    <text x="120" y="500" font-size="78" font-weight="700" letter-spacing="-3">
+      Paid once. Yours forever.
+    </text>
+    <text x="120" y="560" font-size="30" font-weight="500" fill="#525252">
+      Private photo storage on the Autonomi network.
+    </text>
+  </g>
+
+  <rect x="0" y="618" width="1200" height="12" fill="#0a0a0a" />
+</svg>

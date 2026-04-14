@@ -1,0 +1,31 @@
+---
+interface Props {
+  readonly text: string;
+  readonly caption?: string;
+}
+
+const { text, caption } = Astro.props;
+---
+
+<div class="statement">
+  <p class="statement__text">{text}</p>
+  {caption && <p class="statement__caption">{caption}</p>}
+</div>
+
+<style>
+  .statement {
+    max-width: 48rem;
+  }
+  .statement__text {
+    font-size: clamp(1.5rem, 2.2vw + 0.5rem, 2.25rem);
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+  .statement__caption {
+    margin: 1.25rem 0 0;
+    font-size: 1rem;
+    color: var(--text-muted);
+  }
+</style>

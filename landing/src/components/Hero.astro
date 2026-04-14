@@ -1,0 +1,56 @@
+---
+interface CtaProps {
+  readonly label: string;
+  readonly href: string;
+}
+
+interface Props {
+  readonly eyebrow?: string;
+  readonly title: string;
+  /** Optional HTML override for the h1. Used for in-title emphasis. */
+  readonly titleHtml?: string;
+  readonly subtitle: string;
+  readonly primaryCta?: CtaProps;
+  readonly secondaryCta?: CtaProps;
+}
+
+const { eyebrow, title, titleHtml, subtitle, primaryCta, secondaryCta } = Astro.props;
+---
+
+<section class="hero plain">
+  <div class="container">
+    {eyebrow && <p class="eyebrow">{eyebrow}</p>}
+    <h1 class="hero__title" set:html={titleHtml ?? title} />
+    <p class="hero__subtitle lede">{subtitle}</p>
+    {
+      (primaryCta || secondaryCta) && (
+        <div class="actions">
+          {primaryCta && (
+            <a class="cta" href={primaryCta.href}>
+              {primaryCta.label}
+            </a>
+          )}
+          {secondaryCta && (
+            <a class="cta cta--ghost" href={secondaryCta.href}>
+              {secondaryCta.label}
+            </a>
+          )}
+        </div>
+      )
+    }
+  </div>
+</section>
+
+<style>
+  .hero {
+    padding: clamp(4rem, 10vw, 8rem) 0 clamp(3rem, 6vw, 5rem);
+  }
+  .hero__title {
+    max-width: 22ch;
+    margin: 0 0 1.25rem;
+  }
+  .hero__subtitle {
+    max-width: 36rem;
+    margin-bottom: 0;
+  }
+</style>

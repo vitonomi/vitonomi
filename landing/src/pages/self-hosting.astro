@@ -1,0 +1,98 @@
+---
+import FeatureGrid from '../components/FeatureGrid.astro';
+import Hero from '../components/Hero.astro';
+import Steps from '../components/Steps.astro';
+import Base from '../layouts/Base.astro';
+import { SITE, type PageMeta } from '../config';
+
+const meta: PageMeta = {
+  title: 'Self-hosting vitonomi — run it yourself, keep every key',
+  description:
+    'Every feature in vitonomi works without our infrastructure. Run the web app or the CLI against Autonomi directly, pay ANT at cost, and store your data on hardware you control.',
+  path: '/self-hosting',
+};
+
+const whyPoints = [
+  {
+    title: 'No dependence on vitonomi',
+    body: 'If vitonomi the company disappears, self-hosters lose nothing. The code, the data format, and your keys stay in your hands.',
+  },
+  {
+    title: 'Pay ANT directly',
+    body: 'No EUR wallet, no Stripe, no margin. Self-hosters pay the Autonomi network at raw token cost.',
+  },
+  {
+    title: 'Bring your own AI',
+    body: 'Use your own Venice.ai key for confidential tagging, or swap in a local ONNX/CLIP model when the v1.1 fallback lands.',
+  },
+];
+
+const steps = [
+  {
+    title: 'Clone the repo',
+    body: 'Clone github.com/vitonomi/vitonomi and install dependencies with npm install. Node 20+ is all you need.',
+  },
+  {
+    title: 'Configure your mode',
+    body: 'Set VITONOMI_MODE=selfhosted. The web app skips the hosted cloud entirely and talks to Autonomi directly through the core library.',
+  },
+  {
+    title: 'Fund your wallet',
+    body: 'Top up a small ANT balance. Uploads will pay at-cost through the Autonomi client, with no intermediary.',
+  },
+];
+---
+
+<Base meta={meta} breadcrumbName="Self-hosting">
+  <Hero
+    eyebrow="Self-hosting"
+    title="Run it yourself. Keep every key."
+    subtitle="Every feature in vitonomi ships a self-hosted code path. The web app, the recovery CLI, and the core library all work end-to-end without our infrastructure."
+    primaryCta={{ label: 'Read the docs on GitHub', href: SITE.docsBaseUrl }}
+    secondaryCta={{ label: 'Browse the source', href: SITE.repoUrl }}
+  />
+
+  <section>
+    <div class="container">
+      <p class="eyebrow">Why self-host</p>
+      <h2>Keep the keys. Keep the costs. Keep the code.</h2>
+      <div class="why">
+        <FeatureGrid features={whyPoints} columns={3} />
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="container">
+      <p class="eyebrow">The three steps</p>
+      <h2>From clone to first upload in minutes.</h2>
+      <div class="steps-wrap">
+        <Steps steps={steps} />
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container container--prose prose">
+      <p class="eyebrow">What you get</p>
+      <h2>Exactly what hosted users get. Built from the same code.</h2>
+      <ul>
+        <li>The same web UI and CLI as hosted users — same repository, same release.</li>
+        <li>No margin, no subscription, no vendor lock-in.</li>
+        <li>A one-page audit trail: the data format is documented and versioned.</li>
+        <li>A working recovery path from a BIP-39-style seed phrase.</li>
+      </ul>
+      <p class="lede">
+        Prefer the hosted service with a credit wallet and cloud backup? Open
+        <a class="link-inline" href={SITE.appUrl}>vitonomi.app</a> and get started in a minute.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .why,
+  .steps-wrap {
+    margin-top: clamp(2.5rem, 4vw, 3.5rem);
+  }
+</style>

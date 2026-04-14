@@ -1,0 +1,139 @@
+---
+import FeatureGrid from '../components/FeatureGrid.astro';
+import Hero from '../components/Hero.astro';
+import Statement from '../components/Statement.astro';
+import Base from '../layouts/Base.astro';
+import { SITE, type PageMeta } from '../config';
+
+const meta: PageMeta = {
+  title: 'Privacy & security — how vitonomi protects your photos',
+  description:
+    'Dual-key Argon2id, client-side self-encryption via Autonomi, confidential AI inside a hardware TEE, and post-quantum cryptography (ML-DSA-65 + ML-KEM-768) end to end.',
+  path: '/privacy',
+};
+
+const layers = [
+  {
+    title: 'Dual-key derivation',
+    body: 'Your password runs through Argon2id with two salts. One derives the auth key (sent to the server). One derives the encryption key (never leaves your device).',
+  },
+  {
+    title: 'Client-side self-encryption',
+    body: 'Photos are chunked and encrypted on your device using the Autonomi self-encryption algorithm. Only encrypted chunks and a data map ever leave your browser.',
+  },
+  {
+    title: 'Confidential AI',
+    body: 'Classification runs on Venice.ai via NEAR AI’s confidential GPU marketplace. Your photo is decrypted only inside a hardware trusted execution environment.',
+  },
+  {
+    title: 'Post-quantum',
+    body: 'Every signature is ML-DSA-65. Every key encapsulation is ML-KEM-768. Matches Autonomi 2.0. Harvest-now-decrypt-later is out of scope.',
+  },
+];
+
+const threats = [
+  {
+    title: 'Malicious vitonomi cloud',
+    body: 'Worst case: we see your encrypted blobs, your auth-key hash, and your credit history. We see zero plaintext photo bytes, zero tags, and zero encryption keys.',
+  },
+  {
+    title: 'Malicious Autonomi node',
+    body: 'Nodes store encrypted chunks they cannot decrypt. Content-addressing ensures they cannot substitute fake data without breaking retrieval.',
+  },
+  {
+    title: 'Malicious Venice.ai TEE',
+    body: 'Attestation reports are verified on every inference. If the TEE is compromised, the attestation fails and the request is rejected before your photo is unsealed.',
+  },
+  {
+    title: 'Lost password',
+    body: 'Recover from a BIP-39 seed phrase. Re-derive your keys. Retrieve your data map from your Autonomi scratchpad. Your library is fully reconstructable.',
+  },
+];
+---
+
+<Base meta={meta} breadcrumbName="Privacy & security">
+  <Hero
+    eyebrow="Privacy & security"
+    title="Four layers. Zero plaintext on our side."
+    subtitle="vitonomi’s security promise is specific and testable: our servers never see plaintext photos, metadata, or encryption keys."
+    primaryCta={{ label: 'Read the source', href: SITE.repoUrl }}
+  />
+
+  <section>
+    <div class="container">
+      <p class="eyebrow">How your photos are protected</p>
+      <h2>Four layers of defence, end to end.</h2>
+      <div class="layers">
+        <FeatureGrid features={layers} columns={2} />
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="container">
+      <p class="eyebrow">Threat model at a glance</p>
+      <h2>What each attacker can and cannot do.</h2>
+      <p class="lede">
+        Our full threat model is being published alongside the v1.0 release. Here is the short
+        version.
+      </p>
+      <div class="threats">
+        <FeatureGrid features={threats} columns={2} />
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container container--prose prose">
+      <p class="eyebrow">Cryptographic choices</p>
+      <h2>The primitives we rely on, in one place.</h2>
+      <ul>
+        <li>
+          <strong>Password KDF:</strong> Argon2id, memory ≥ 256 MiB, run in a Web Worker — Grover-resistant
+          at current parameters.
+        </li>
+        <li>
+          <strong>Symmetric AEAD:</strong> XChaCha20-Poly1305 with 256-bit keys. Grover halves effective
+          security; 128-bit is still comfortable.
+        </li>
+        <li>
+          <strong>Signatures:</strong> ML-DSA-65 (post-quantum, NIST FIPS 204).
+        </li>
+        <li>
+          <strong>Key encapsulation:</strong> ML-KEM-768 (post-quantum, NIST FIPS 203).
+        </li>
+        <li>
+          <strong>Self-encryption:</strong> Autonomi 2.0 native — also post-quantum end-to-end.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="container">
+      <Statement
+        text="Trust, but verify."
+        caption="The full cryptographic surface, byte layouts, and threat model live in the open repo under BSL 1.1."
+      />
+      <div class="actions">
+        <a class="cta" href={`${SITE.repoUrl}/tree/main/core/src/crypto`} rel="noopener noreferrer">
+          Read core/src/crypto on GitHub
+        </a>
+        <a
+          class="cta cta--ghost"
+          href={`${SITE.docsBaseUrl}/data-format.md`}
+          rel="noopener noreferrer"
+        >
+          Read the data format
+        </a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .layers,
+  .threats {
+    margin-top: clamp(2.5rem, 4vw, 3.5rem);
+  }
+</style>

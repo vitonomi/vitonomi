@@ -9,9 +9,13 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/dist/**',
       '**/.next/**',
+      '**/.astro/**',
       '**/coverage/**',
       '**/*.config.js',
       '**/*.config.mjs',
+      // Astro files are type-checked by `astro check`, not ESLint.
+      '**/*.astro',
+      'landing/**',
     ],
   },
   ...tseslint.configs.recommendedTypeChecked,

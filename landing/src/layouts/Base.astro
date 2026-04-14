@@ -1,0 +1,73 @@
+---
+import Footer from '../components/Footer.astro';
+import Header from '../components/Header.astro';
+import JsonLd from '../components/JsonLd.astro';
+import { SITE, absoluteUrl, canonicalUrl, type PageMeta } from '../config';
+import '../styles/global.css';
+
+interface Props {
+  readonly meta: PageMeta;
+  readonly breadcrumbName?: string;
+}
+
+const { meta, breadcrumbName } = Astro.props;
+const title = meta.title;
+const canonical = canonicalUrl(meta.path);
+// TODO(phase-11): replace with a 1200×630 PNG twin so Twitter/X cards render
+// (Facebook and LinkedIn accept SVG).
+const ogImage = meta.ogImage ?? absoluteUrl('/og-image.svg');
+---
+
+<!doctype html>
+<html lang={SITE.locale}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light only" />
+    <meta name="theme-color" content={SITE.themeColor} />
+    <meta name="description" content={meta.description} />
+    <meta name="generator" content={Astro.generator} />
+    {meta.noindex && <meta name="robots" content="noindex, nofollow" />}
+
+    <title>{title}</title>
+    <link rel="canonical" href={canonical} />
+
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={SITE.name} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={meta.description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:type" content="image/svg+xml" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content={SITE.locale} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={meta.description} />
+    <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:site" content={SITE.twitterHandle} />
+
+    {
+      breadcrumbName ? (
+        <JsonLd path={meta.path} includeBreadcrumb breadcrumbName={breadcrumbName} />
+      ) : (
+        <JsonLd path={meta.path} />
+      )
+    }
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <Header />
+    <main id="main"><slot /></main>
+    <Footer />
+  </body>
+</html>

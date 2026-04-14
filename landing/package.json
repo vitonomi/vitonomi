@@ -1,0 +1,21 @@
+{
+  "name": "@vitonomi/landing",
+  "version": "0.0.0",
+  "private": true,
+  "description": "vitonomi.com — SEO-optimized, statically generated landing site (BSL 1.1)",
+  "license": "BUSL-1.1",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro check && astro build",
+    "preview": "astro preview",
+    "typecheck": "astro check",
+    "clean": "rm -rf dist .astro"
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@astrojs/sitemap": "^3.7.0",
+    "astro": "^5.15.0",
+    "typescript": "^5.6.2"
+  }
+}
