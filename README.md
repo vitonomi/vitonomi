@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="landing/public/vitonomi_logo.png" width="180" alt="Vito, the vitonomi mascot" />
+  <img src="landing/public/vitonomi_signet.png" width="180" alt="Vito, the vitonomi mascot" />
 </p>
 
 <h1 align="center">vitonomi</h1>
