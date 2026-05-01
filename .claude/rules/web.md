@@ -1,8 +1,8 @@
 ---
 paths:
-  - "web/**"
+  - "clients/web/**"
 ---
-# web/ rules
+# clients/web/ rules
 
 - Next.js App Router. Fetch data in Server Components with async/await.
 - Two runtime modes (hosted vs self-hosted) — determined by config, not build flags.

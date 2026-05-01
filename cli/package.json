@@ -2,8 +2,8 @@
   "name": "@vitonomi/cli",
   "version": "0.0.0",
   "private": true,
-  "description": "vitonomi CLI — recovery, upload, export (BSL 1.1)",
-  "license": "BUSL-1.1",
+  "description": "vitonomi CLI — vault/hub/relay subcommands plus seed-phrase recovery (AGPL-3.0)",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "bin": {
     "vitonomi-cli": "./dist/index.js"

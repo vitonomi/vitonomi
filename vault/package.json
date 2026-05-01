@@ -1,10 +1,13 @@
 {
-  "name": "@vitonomi/web",
+  "name": "@vitonomi/vault",
   "version": "0.0.0",
   "private": true,
-  "description": "vitonomi web app — Next.js (BSL 1.1). Full scaffold lands in Phase 6.",
-  "license": "BUSL-1.1",
+  "description": "vitonomi vault daemon — local storage + libp2p peer protocol (AGPL-3.0). Implementation lands in PROJECT.md Phase 3.",
+  "license": "AGPL-3.0-only",
   "type": "module",
+  "bin": {
+    "vitonomi-vault": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc -b",
     "clean": "rm -rf dist tsconfig.tsbuildinfo",

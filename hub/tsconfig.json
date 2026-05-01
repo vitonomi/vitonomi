@@ -5,7 +5,7 @@
     "outDir": "./dist",
     "tsBuildInfoFile": "./tsconfig.tsbuildinfo"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["dist", "tests", "**/*.test.ts", "**/*.test.tsx"],
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "tests", "**/*.test.ts"],
   "references": [{ "path": "../core" }]
 }

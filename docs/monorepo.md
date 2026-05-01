@@ -1,81 +1,133 @@
-# vitonomi monorepo strategy
+---
+formatVersion: 1
+status: stable
+last-reviewed: 2026-05-01
+---
 
-The public repo (`vitonomi/`) uses **npm workspaces** to host four packages
-that share a single dependency tree, single TypeScript baseline, and single
-test runner:
+# vitonomi monorepo topology
+
+The vitonomi project lives in two repositories. This document is the
+public-facing reference for that split and for the workspace layout
+inside the public repo.
+
+## The two-repo split
+
+- **`github.com/vitonomi/vitonomi`** — the public, AGPL-3.0 repository.
+  Contains every component a user runs: vault daemon, hub server,
+  vitonomi-mx SMTP relay, the PWA client, the CLI, the landing site,
+  and the shared library that ties them together. Everything in this
+  doc set documents this repo.
+- **`github.com/vitonomi/cloud`** — the private, proprietary repository.
+  Contains only the hosted-service-specific layer: subscription
+  billing, treasury management, internal analytics, and infrastructure-
+  as-code for the hosted deployment of `vito.gg`. It depends on the
+  AGPL hub through its public APIs only — there is no special
+  hosted-only fork of the hub binary.
+
+The split exists so that:
+
+1. Every user-runnable binary stays AGPL and auditable. Self-hosters
+   never need access to anything in the private repo.
+2. Hosted-service-specific commercial logic (Stripe, plan gating,
+   cost-basis accounting, infra-as-code) stays out of the AGPL
+   surface to keep the open-source product cleanly defined.
+
+## Public-repo workspaces
+
+The public repo is an npm workspaces monorepo:
 
 ```
 vitonomi/
-├── package.json            ← root, declares workspaces
-├── tsconfig.base.json      ← strict TS settings inherited by every package
-├── tsconfig.json           ← root project references for editor tooling
-├── eslint.config.js        ← flat config, applied across all packages
-├── .prettierrc.json
-├── vitest.config.ts        ← root config; per-package configs extend it
-├── core/                   ← @vitonomi/core — shared library (crypto, storage, types)
-├── web/                    ← @vitonomi/web — Next.js app (hosted + self-hosted)
-├── cli/                    ← @vitonomi/cli — recovery + upload tool
-└── landing/                ← @vitonomi/landing — Astro SSG (vitonomi.com)
+  core/         shared library — crypto, types, protocol interfaces
+  vault/        vault daemon — bin: vitonomi-vault
+  hub/          hub control-plane server — bin: vitonomi-hub
+  mx/           vitonomi-mx SMTP relay — bin: vitonomi-mx
+  cli/          user-facing `vitonomi` command — dispatches to daemon bins
+  landing/      Astro static site for vitonomi.com
+  clients/
+    web/        PWA (Next.js, mobile-ready) — MVP
+    mobile/     React Native iOS + Android — v1.1+ (not scaffolded)
+    ext/        browser extensions — v1.1+ (not scaffolded)
+  docs/         specification suite (this directory)
 ```
 
-## Why npm workspaces (and not pnpm/turbo/nx)
+The `clients/` directory is the only category prefix in the layout. It
+exists because there will be N sibling client surfaces (PWA, mobile,
+browser extensions). Every other workspace is a singleton at the top
+level.
 
-- **Zero extra tools**: every contributor already has `npm`. No per-machine
-  install of pnpm or a build orchestrator.
-- **No remote-cache lock-in**: builds and tests run the same locally and in CI.
-- **Three packages, one boundary**: the workspace is small enough that we don't
-  need task graph caching. If we ever exceed ~6 packages, revisit.
-- **Self-hosters benefit**: anyone cloning the repo can `npm install` and run
-  the CLI without learning a new package manager.
+## Workspace dependency graph
 
-## Inter-package consumption
+```
+core ◄── vault
+core ◄── hub
+core ◄── mx
+core ◄── cli
+core ◄── clients/web
 
-`web/` and `cli/` consume `core/` as `"@vitonomi/core": "*"` workspace
-dependencies. `core/` is the only package that builds emitted `.d.ts` files
-for downstream type checking; `web/` and `cli/` build their own outputs but
-do not need to be consumed by anything else in this repo.
+cli ──► (execs daemon binaries via `vitonomi vault start`, etc.)
+```
 
-## What lives where
+`core/` has no internal dependencies on other workspaces. Every other
+package depends on `core` and only on `core`.
 
-- **`core/`** — anything client-side that must work offline or in a Web Worker.
-  Crypto, Autonomi storage backend, tag index, recovery, types.
-- **`cli/`** — Node-only entry points that wrap `core/` for terminal use:
-  upload, recover, export, import, and the `storage smoke` integration command.
-- **`web/`** — Next.js app. Imports `core/` and the OpenAPI-generated client.
-  Holds React components, route handlers, runtime config loader.
-- **`landing/`** — Astro SSG for `vitonomi.com`. Zero dependency on `core/`.
-  Pure static marketing + SEO content, deployed independently from the app.
+## Per-package layout
 
-## Deploying two Vercel projects from one repo
+Each workspace follows the same canonical shape:
 
-`landing/` and `web/` deploy to different domains (`vitonomi.com` and
-`vitonomi.app`) from the same GitHub repo. The setup:
+```
+<package>/
+  src/                         implementation
+  tests/                       sibling test directory (not colocated)
+  package.json                 strict exports map; no default exports
+  tsconfig.json                extends ../tsconfig.base.json
+  README.md                    purpose, install, dev, test, gotchas
+  CLAUDE.md                    agent-facing rules for this package
+```
 
-- Two Vercel projects, both linked to the same repo.
-- Each project sets **Root Directory** to its own package (`landing` or
-  `web`). Vercel resolves install/build inside that directory.
-- Install + build commands `cd` up to the repo root so npm workspaces
-  resolve correctly, then run the workspace-scoped build
-  (`npm run build -w @vitonomi/landing` / `-w @vitonomi/web`).
-- Each project configures an "Ignored Build Step" that skips the deploy
-  when only the other package changed. Example for landing:
-  `git diff --quiet HEAD^ HEAD -- ../landing ../package.json` returns
-  non-zero (i.e., build) only when landing-relevant files moved.
-- Production domains, preview URLs, and deploy protection are configured
-  independently per project.
+Tests live in a sibling `tests/` directory rather than colocated with
+source so that `tests/security/` (for crypto packages) is a single,
+auditable location.
 
-The two packages share no code. ESLint ignores `.astro` files (Astro runs
-its own type check via `astro check`). Prettier formats `.astro` via
-`prettier-plugin-astro`.
+## Tooling
 
-## What does **not** live in this repo
+| Concern       | Choice                                            |
+| ------------- | ------------------------------------------------- |
+| Language      | TypeScript 5.6+ strict, no `any`                  |
+| Module system | ES modules (NodeNext), no CommonJS                |
+| Workspaces    | npm workspaces (not pnpm)                         |
+| Build         | TypeScript project references via `tsc -b`        |
+| Test runner   | Vitest                                            |
+| Linter        | ESLint flat config (typescript-eslint + import)   |
+| Formatter     | Prettier (with prettier-plugin-astro for landing) |
+| Pre-commit    | Husky + lint-staged                               |
+| CI            | GitHub Actions, Node 20 + 22 matrix               |
+| OpenAPI       | spectral lint                                     |
 
-- **`cloud/`** is a separate private repo. It is not a workspace member.
-- The OpenAPI spec at `docs/api-spec.yaml` is the only contract that crosses
-  the public/cloud boundary.
+The Node version is pinned in `.nvmrc` and `engines` (≥20).
 
-## Versioning
+## Build commands
 
-All packages share the same version, bumped together. We do not publish
-`@vitonomi/core` to npm in MVP — self-hosters install from the workspace.
-Independent versioning can be revisited if the library gains external consumers.
+Per-workspace, run from the repo root:
+
+```bash
+npm install                              # install everything
+npm run typecheck                        # tsc -b across all workspaces
+npm run lint                             # ESLint across the repo
+npm run format                           # Prettier write
+npm test                                 # Vitest across all workspaces
+npm run dev -w @vitonomi/clients/web     # PWA dev server
+npm run dev -w @vitonomi/hub             # hub dev server
+npm run dev -w @vitonomi/vault           # vault dev server
+npm run dev -w @vitonomi/mx              # mx dev server
+npm run dev -w @vitonomi/landing         # landing dev server
+```
+
+## Cross-references
+
+- Full per-component architecture: [`architecture.md`](architecture.md).
+- Component lifecycles: [`encryption-flows.md`](encryption-flows.md).
+- Wire protocols between components: [`protocol.md`](protocol.md).
+- HTTP API contract: [`api-spec.yaml`](api-spec.yaml).
+- Repository contributing guide: `../CONTRIBUTING.md` (in repo root,
+  added in Phase 0.5 cleanup).

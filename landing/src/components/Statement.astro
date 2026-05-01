@@ -2,13 +2,24 @@
 interface Props {
   readonly text: string;
   readonly caption?: string;
+  /** Substring of `text` to wrap in brand-color accent. */
+  readonly highlight?: string;
 }
 
-const { text, caption } = Astro.props;
+const { text, caption, highlight } = Astro.props;
+
+function renderText(raw: string, hl?: string): string {
+  if (!hl) return raw;
+  const idx = raw.indexOf(hl);
+  if (idx === -1) return raw;
+  const before = raw.slice(0, idx);
+  const after = raw.slice(idx + hl.length);
+  return `${before}<span class="accent">${hl}</span>${after}`;
+}
 ---
 
-<div class="statement">
-  <p class="statement__text">{text}</p>
+<div class="statement" data-reveal>
+  <p class="statement__text" set:html={renderText(text, highlight)} />
   {caption && <p class="statement__caption">{caption}</p>}
 </div>
 

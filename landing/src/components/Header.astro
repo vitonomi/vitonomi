@@ -1,5 +1,19 @@
 ---
 import { SITE } from '../config';
+
+const path = Astro.url.pathname.replace(/\/+$/, '');
+
+interface NavItem {
+  readonly href: string;
+  readonly label: string;
+  readonly external?: true;
+}
+
+const navItems: readonly NavItem[] = [
+  { href: '/self-hosting', label: 'Self-hosting' },
+  { href: '/privacy', label: 'Privacy' },
+  { href: SITE.repoUrl, label: 'GitHub', external: true },
+];
 ---
 
 <header class="site-header">
@@ -17,11 +31,22 @@ import { SITE } from '../config';
     </a>
     <nav aria-label="Primary">
       <ul class="site-header__nav">
-        <li><a href="/self-hosting">Self-hosting</a></li>
-        <li><a href="/privacy">Privacy</a></li>
-        <li>
-          <a href={SITE.repoUrl} rel="noopener noreferrer">GitHub</a>
-        </li>
+        {
+          navItems.map((item) => {
+            const active = !item.external && path === item.href;
+            return (
+              <li>
+                <a
+                  href={item.href}
+                  aria-current={active ? 'page' : undefined}
+                  rel={item.external ? 'noopener noreferrer' : undefined}
+                >
+                  {item.label}
+                </a>
+              </li>
+            );
+          })
+        }
       </ul>
     </nav>
     <a class="site-header__cta" href={SITE.appUrl}>Open app</a>
@@ -33,8 +58,10 @@ import { SITE } from '../config';
     position: sticky;
     top: 0;
     z-index: 20;
-    background: var(--bg);
-    border-bottom: 1px solid var(--border);
+    background: var(--bg-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(229, 229, 229, 0.6);
   }
 
   .site-header__row {
@@ -79,6 +106,10 @@ import { SITE } from '../config';
   .site-header__nav a:hover,
   .site-header__nav a:focus-visible {
     opacity: 1;
+  }
+  .site-header__nav a[aria-current='page'] {
+    opacity: 1;
+    color: var(--brand);
   }
 
   .site-header__cta {

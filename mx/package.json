@@ -1,0 +1,20 @@
+{
+  "name": "@vitonomi/mx",
+  "version": "0.0.0",
+  "private": true,
+  "description": "vitonomi-mx — open-source, log-free, RAM-only SMTP receiver (AGPL-3.0). Implementation lands in PROJECT.md Phase 8.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "bin": {
+    "vitonomi-mx": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vitonomi/core": "*"
+  }
+}

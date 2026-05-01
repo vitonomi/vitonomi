@@ -4,9 +4,9 @@ export const SITE = {
   appUrl: 'https://vitonomi.app',
   repoUrl: 'https://github.com/vitonomi/vitonomi',
   docsBaseUrl: 'https://github.com/vitonomi/vitonomi/blob/main/docs',
-  defaultTitle: 'vitonomi — private photo storage. Paid once. Yours forever.',
+  defaultTitle: 'vitonomi — unified private storage for all your sensitive data',
   defaultDescription:
-    'Privacy-first photo storage on the Autonomi network. Self-encrypted on your device. Post-quantum secure. Open source.',
+    'Self-hostable, post-quantum encrypted storage platform. Credentials and email aliases at launch. Photos, documents, and more coming soon. AGPL-3.0.',
   twitterHandle: '@vitonomi',
   themeColor: '#ffffff',
   locale: 'en',

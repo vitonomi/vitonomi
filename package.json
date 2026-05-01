@@ -2,17 +2,20 @@
   "name": "vitonomi",
   "version": "0.0.0",
   "private": true,
-  "description": "vitonomi — privacy-first, pay-once photo storage on Autonomi",
-  "license": "BUSL-1.1",
+  "description": "vitonomi — privacy-first, self-hostable storage platform for sensitive personal data",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "engines": {
     "node": ">=20.0.0"
   },
   "workspaces": [
     "core",
+    "vault",
+    "hub",
+    "mx",
     "cli",
-    "web",
-    "landing"
+    "landing",
+    "clients/*"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

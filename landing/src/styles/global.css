@@ -21,6 +21,16 @@
     Inter, Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono:
     ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --brand-glow: rgba(247, 147, 26, 0.12);
+  --brand-subtle: rgba(247, 147, 26, 0.06);
+  --glow-orange: rgba(247, 147, 26, 0.08);
+  --glow-amber: rgba(251, 191, 36, 0.06);
+  --glow-warm: rgba(234, 88, 12, 0.05);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --bg-glass: rgba(255, 255, 255, 0.8);
+  --gradient-hero: linear-gradient(160deg, var(--bg) 0%, rgba(247, 147, 26, 0.03) 100%);
 }
 
 *,
@@ -163,19 +173,35 @@ hr {
 
 section {
   padding: clamp(3.5rem, 6vw, 6rem) 0;
-  border-top: 1px solid var(--border);
+  border-top: none;
+  position: relative;
 }
-section:first-of-type {
-  border-top: 0;
+section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
+}
+section:first-of-type::before {
+  display: none;
 }
 section.tight {
   padding: clamp(2.5rem, 4vw, 4rem) 0;
 }
-section.plain {
-  border-top: 0;
+section.plain::before {
+  display: none;
 }
 section.alt {
-  background: var(--bg-alt);
+  background-color: var(--bg-alt);
+  background-image:
+    radial-gradient(ellipse 60% 40% at 80% 50%, var(--glow-orange), transparent),
+    radial-gradient(circle, var(--border) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    24px 24px;
 }
 
 .eyebrow {
@@ -192,17 +218,14 @@ section.alt {
 .eyebrow::before {
   content: '';
   display: inline-block;
-  width: 0;
-  height: 0;
-  border-top: 5px solid transparent;
-  border-bottom: 5px solid transparent;
-  border-left: 8px solid var(--text);
+  width: 16px;
+  height: 2px;
+  background: var(--brand);
 }
 
 .lede {
   font-size: clamp(1.1rem, 0.4vw + 1rem, 1.3rem);
   color: var(--text-muted);
-  max-width: 42rem;
   line-height: 1.55;
 }
 
@@ -230,6 +253,12 @@ section.alt {
   border-color: var(--brand-hover);
   color: var(--brand-contrast);
   text-decoration: none;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.cta:active {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .cta--ghost {
@@ -279,4 +308,29 @@ section.alt {
 }
 .prose ul li::marker {
   color: var(--text-muted);
+}
+
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(20px);
+  transition:
+    opacity 0.5s ease,
+    transform 0.5s ease;
+}
+[data-reveal].revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+  }
 }

@@ -14,7 +14,7 @@ const { steps } = Astro.props;
 <ol class="steps">
   {
     steps.map((step, i) => (
-      <li class="step">
+      <li class="step" data-reveal style={`transition-delay: ${i * 0.08}s`}>
         <span class="step__index" aria-hidden="true">
           {String(i + 1).padStart(2, '0')}
         </span>
@@ -43,6 +43,7 @@ const { steps } = Astro.props;
     padding: 1.75rem 0;
     border-top: 1px solid var(--border);
     align-items: baseline;
+    position: relative;
   }
   .step:last-child {
     border-bottom: 1px solid var(--border);
@@ -54,6 +55,16 @@ const { steps } = Astro.props;
     color: var(--text-muted);
     letter-spacing: 0.08em;
     padding-top: 0.2rem;
+    position: relative;
+  }
+  .step:not(:last-child) .step__index::after {
+    content: '';
+    position: absolute;
+    left: 0.75rem;
+    top: 1.4rem;
+    bottom: -1.75rem;
+    width: 1px;
+    background: linear-gradient(to bottom, var(--brand), var(--border));
   }
 
   .step__title {
@@ -73,6 +84,9 @@ const { steps } = Astro.props;
     .step {
       grid-template-columns: 1fr;
       gap: 0.5rem;
+    }
+    .step:not(:last-child) .step__index::after {
+      display: none;
     }
   }
 </style>
