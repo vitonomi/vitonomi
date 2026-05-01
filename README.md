@@ -1,55 +1,87 @@
 <p align="center">
-  <img src="landing/public/vito/vito.png" width="180" alt="Vito, the vitonomi mascot" />
+  <img src="landing/public/vitonomi_logo.png" width="180" alt="Vito, the vitonomi mascot" />
 </p>
 
 <h1 align="center">vitonomi</h1>
 
 <p align="center">
-  <strong>Private photo storage. Paid once. Yours forever.</strong><br />
-  <em>Self-encrypted · Post-quantum · Open source</em>
+  <strong>Sensitive data, in your own hands.</strong><br />
+  <em>Self-hostable · Post-quantum · Autonomi-compatible · Open source</em>
 </p>
 
 <p align="center">
   <a href="https://vitonomi.com">vitonomi.com</a> ·
-  <a href="https://vitonomi.app">vitonomi.app</a> ·
+  <a href="https://app.vitonomi.com">app.vitonomi.com</a> ·
+  <a href="docs/README.md">Specifications</a> ·
   <a href="CLAUDE.md">Contributing</a> ·
-  <a href="https://mariadb.com/bsl11/">BSL 1.1</a>
+  <a href="LICENSE">AGPL-3.0</a>
 </p>
 
 ---
 
 ## What is vitonomi?
 
-vitonomi is privacy-first photo storage on the
-[Autonomi](https://autonomi.com) network with optional confidential AI tagging
-via [Venice.ai](https://venice.ai). Users pay once to store their library
-forever. Photos are self-encrypted on the device, so our servers — and every
-node that hosts a chunk — only ever see opaque ciphertext.
+vitonomi is a privacy-first, self-hostable storage platform for the
+sensitive personal data you don't want scattered across corporate
+clouds. At MVP, vitonomi stores **credentials** (a zero-knowledge
+password manager) and **email aliases** (receive-only addresses on
+`vito.gg` or any custom domain you own). Photos, videos, documents,
+and more types follow in v1.1+ on the same data layer.
 
-Every asymmetric key is post-quantum secure (ML-DSA-65 for signatures,
-ML-KEM-768 for key encapsulation), matching Autonomi 2.0's own stack.
+You hold the keys. The hub stores opaque ciphertext. Your vaults
+store opaque encrypted chunks. Even our own servers can never read
+your data — the architecture forbids it.
+
+**Architecture in one sentence.** Users run one or more **vaults**
+(storage daemons on home hardware or a VPS) coordinated by a thin
+**hub** (control plane); clients reach their main vault over libp2p;
+inbound mail to alias addresses is encrypted in RAM by the open-
+source **`vitonomi-mx`** SMTP receiver and forwarded as ciphertext to
+the user's hub.
+
+**Autonomi-compatible from day one.** vitonomi chunks and DataMaps
+are byte-for-byte compatible with the
+[Autonomi](https://autonomi.com) 2.0 network. In MVP they live on
+your vaults; in v1.1 they can be pushed to the Autonomi network as
+an additional replica target with zero format migration. See
+[`docs/autonomi-compat.md`](docs/autonomi-compat.md).
+
+**Post-quantum end to end.** ML-DSA-65 (signatures), ML-KEM-768 (key
+encapsulation), XChaCha20-Poly1305 (AEAD), Argon2id (KDF). No
+Ed25519, no X25519. No harvest-now-decrypt-later risk.
 
 ## Status
 
-Pre-MVP. The codebase is under active development on a public roadmap.
-Phase 0 (tooling, workspaces, CI) and Phase 0.1 (landing site) are complete.
-Phase 1 (core/ foundations) is next. See the workspace-level `PROJECT.md` for
-the full 12-phase plan.
+Pre-MVP. The repo is under active development on a public 13-phase
+roadmap. Phase 0 (tooling, workspaces, CI), Phase 0.1 (landing site),
+and most of Phase 0.5 (post-pivot restructure: AGPL relicense, new
+`vault/`/`hub/`/`mx/` workspace stubs, `web/` → `clients/web/` move,
+spec-suite foundation in `docs/`) are complete. Phase 1 (`core/`
+foundations) is next.
+
+The full plan lives in the workspace-level `PROJECT.md`. Each phase
+has a clear deliverable list and verification gate.
 
 ## Repository layout
 
-This is the **public** repo, source-available under BSL 1.1. The proprietary
-hosted backend (`cloud/`) lives in a separate private repo.
+This is the **public** AGPL-3.0 repository. The private repository at
+`github.com/vitonomi/cloud` holds only the proprietary hosted-service
+layer (Stripe billing, treasury, internal analytics, infra-as-code)
+and consumes this repo through its public APIs.
 
-| Package    | Purpose                                                                 |
-| ---------- | ----------------------------------------------------------------------- |
-| `core/`    | Shared library — crypto, Autonomi storage backend, tag index, recovery. |
-| `cli/`     | Standalone recovery & upload tool. Works without any vitonomi server.   |
-| `web/`     | Next.js app for both hosted and self-hosted modes (Phase 6 scaffold).   |
-| `landing/` | Astro static site at [vitonomi.com](https://vitonomi.com).              |
-| `docs/`    | Specs: OpenAPI, data format, flows, architecture references.            |
+| Package        | Purpose                                                                         |
+| -------------- | ------------------------------------------------------------------------------- |
+| `core/`        | Shared library — crypto, types, protocol interfaces, snapshot chain.            |
+| `vault/`       | Vault daemon. `vitonomi-vault` binary. Phase 3 stub today.                      |
+| `hub/`         | Hub control-plane server. `vitonomi-hub` binary. Phase 4 stub today.            |
+| `mx/`          | `vitonomi-mx` SMTP relay. Log-free, RAM-only. Phase 8 stub today.               |
+| `cli/`         | User-facing `vitonomi` CLI; dispatches to daemon binaries plus recovery.        |
+| `landing/`     | Astro static site at [vitonomi.com](https://vitonomi.com).                      |
+| `clients/web/` | Next.js App Router PWA. Phase 6 scaffold.                                       |
+| `clients/`     | Reserved for future client surfaces (mobile, browser extensions in v1.1+).      |
+| `docs/`        | Specification suite (CC-BY-4.0). [docs/README.md](docs/README.md) is the index. |
 
-Everything runs on npm workspaces from the root.
+Everything runs on npm workspaces from the repo root.
 
 ## Quick start
 
@@ -60,10 +92,10 @@ git clone https://github.com/vitonomi/vitonomi.git
 cd vitonomi
 npm install
 
-npm test          # all workspace tests
-npm run lint      # ESLint + format check
-npm run typecheck # tsc -b across references
-npm run build     # build every workspace package
+npm test          # Vitest across all workspaces
+npm run lint      # ESLint flat config
+npm run typecheck # tsc -b across project references
+npm run build     # build every workspace
 ```
 
 Run the landing site locally:
@@ -79,25 +111,50 @@ Run the CLI banner (Phase 0 placeholder):
 npm start -w @vitonomi/cli
 ```
 
+Daemon stubs (`vault`, `hub`, `mx`) currently exit with a
+"Phase N stub — see PROJECT.md" message. Real implementations land
+in their respective phases.
+
 ## Documentation
 
-- [`CLAUDE.md`](CLAUDE.md) — governance, conventions, non-negotiable boundaries
-- [`docs/monorepo.md`](docs/monorepo.md) — workspace strategy
-- [`docs/api-spec.yaml`](docs/api-spec.yaml) — public/cloud API contract (OpenAPI 3.1)
-- [`docs/flows.md`](docs/flows.md) — upload, retrieval, disaster recovery
-- [`docs/autonomi-reference.md`](docs/autonomi-reference.md) — Autonomi 2.0 facts
-- [`docs/venice-ai-reference.md`](docs/venice-ai-reference.md) — confidential AI details
+The specification suite in [`docs/`](docs/) is licensed CC-BY-4.0 so
+any party can implement a compatible client. Reading order:
+
+- [`docs/README.md`](docs/README.md) — suite index + status table
+- [`docs/architecture.md`](docs/architecture.md) — components, trust
+  boundaries, deployment topology, data lifecycle
+- [`docs/autonomi-compat.md`](docs/autonomi-compat.md) — the
+  byte-for-byte compatibility commitment
+- [`docs/data-format.md`](docs/data-format.md) — every byte that
+  vitonomi persists or transmits (incremental from Phase 2 onward)
+- [`docs/threat-model.md`](docs/threat-model.md) — adversaries and
+  defences (full review at Phase 11)
+- [`docs/monorepo.md`](docs/monorepo.md) — workspace topology
+
+Spec docs that land in later phases (`record-types.md`,
+`encryption-flows.md`, `protocol.md`, `api-spec.yaml`,
+`self-hosting.md`, `relay-ops.md`, `relay-reproducible-build.md`)
+exist as stubs today; each points back to the suite index.
 
 ## Core boundaries
 
-A few principles govern this repo and are enforced by code review and tooling:
+Four invariants govern this repo and are enforced by code review and
+tooling. They are non-negotiable:
 
-- **Encryption boundary.** All crypto lives in `core/`, runs client-side, and
-  never crosses into `web/` or `cli/` business logic.
-- **API boundary.** `web/` talks to the hosted backend only through
-  [`docs/api-spec.yaml`](docs/api-spec.yaml). Never imports cloud-repo code.
-- **Self-hosted must work.** Every feature ships a self-hosted code path.
-- **Open source trust.** The core library and data format are auditable.
+- **Encryption boundary.** All crypto lives in `core/`, runs
+  client-side, and never crosses into `clients/web/`, `cli/`,
+  `vault/`, `hub/`, or `mx/`. Servers never see plaintext.
+- **API boundary.** Clients talk to the hub only through
+  [`docs/api-spec.yaml`](docs/api-spec.yaml). Streaming protocols
+  (libp2p, vault↔hub, mx push) live in
+  [`docs/protocol.md`](docs/protocol.md). The private `cloud/`
+  repo is never imported from any public package.
+- **Self-hosted must work.** Every feature ships a self-hosted code
+  path. The hosted offering at `app.vitonomi.com` is one deployment
+  of the same AGPL binaries.
+- **Open-source trust.** Core, vault, hub, mx, CLI, web, and landing
+  are all AGPL-3.0 and reproducibly built where it matters
+  (`vitonomi-mx` first).
 
 ## Meet Vito
 
@@ -105,16 +162,23 @@ A few principles govern this repo and are enforced by code review and tooling:
   <img src="landing/public/vito/vito.png" width="120" alt="Vito, the vitonomi mascot" />
 </p>
 
-Vito is the vitonomi mascot: a hardworking forest ant who carries a camera
-and a bindle full of your memories. He keeps things safe so you don't have to
-think about it. Say hi in an issue or PR — he appreciates the attention.
+Vito is the vitonomi mascot: a hardworking forest ant who carries a
+camera and a bindle full of your secrets. He keeps things safe so
+you don't have to think about it. Say hi in an issue or PR — he
+appreciates the attention.
 
 ## License
 
-Source-available under the [Business Source License 1.1](https://mariadb.com/bsl11/).
-Use it freely for non-commercial purposes; reselling vitonomi as a competing
-hosted service is restricted. The license converts to Apache 2.0 four years
-after each release.
+This repository is licensed under the
+[GNU Affero General Public License, version 3.0 only](LICENSE)
+(AGPL-3.0-only). Run it, fork it, audit it, run it on your own
+hardware. Hosting it as a competing managed service requires you to
+make the same source available to your users on the same terms.
 
-The public documentation in `docs/` is CC-BY-4.0 so anyone can implement a
-compatible client.
+The specification suite under [`docs/`](docs/) is licensed
+[CC-BY-4.0](docs/LICENSE) so any party can implement a compatible
+client without inheriting the AGPL.
+
+Contributions require sign-off via the project's CLA (configured in
+Phase 12; until then, contributions are accepted only from the core
+team).
