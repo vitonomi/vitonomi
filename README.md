@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="landing/public/vitonomi_signet.png" width="180" alt="Vito, the vitonomi mascot" />
+  <img src="public/vitonomi_signet.png" width="180" alt="Vito, the vitonomi mascot" />
 </p>
 
 <h1 align="center">vitonomi</h1>
@@ -76,7 +76,6 @@ and consumes this repo through its public APIs.
 | `hub/`         | Hub control-plane server. `vitonomi-hub` binary. Phase 4 stub today.            |
 | `mx/`          | `vitonomi-mx` SMTP relay. Log-free, RAM-only. Phase 8 stub today.               |
 | `cli/`         | User-facing `vitonomi` CLI; dispatches to daemon binaries plus recovery.        |
-| `landing/`     | Astro static site at [vitonomi.com](https://vitonomi.com).                      |
 | `clients/web/` | Next.js App Router PWA. Phase 6 scaffold.                                       |
 | `clients/`     | Reserved for future client surfaces (mobile, browser extensions in v1.1+).      |
 | `docs/`        | Specification suite (CC-BY-4.0). [docs/README.md](docs/README.md) is the index. |
@@ -96,13 +95,6 @@ npm test          # Vitest across all workspaces
 npm run lint      # ESLint flat config
 npm run typecheck # tsc -b across project references
 npm run build     # build every workspace
-```
-
-Run the landing site locally:
-
-```bash
-npm run dev -w @vitonomi/landing
-# → http://localhost:4321
 ```
 
 Run the CLI banner (Phase 0 placeholder):
@@ -152,14 +144,15 @@ tooling. They are non-negotiable:
 - **Self-hosted must work.** Every feature ships a self-hosted code
   path. The hosted offering at `app.vitonomi.com` is one deployment
   of the same AGPL binaries.
-- **Open-source trust.** Core, vault, hub, mx, CLI, web, and landing
-  are all AGPL-3.0 and reproducibly built where it matters
-  (`vitonomi-mx` first).
+- **Open-source trust.** Core, vault, hub, mx, CLI, and web are all
+  AGPL-3.0 and reproducibly built where it matters (`vitonomi-mx`
+  first). The landing site is also AGPL-3.0 at
+  [`vitonomi/website`](https://github.com/vitonomi/website).
 
 ## Meet Vito
 
 <p align="left">
-  <img src="landing/public/vito/vito.png" width="120" alt="Vito, the vitonomi mascot" />
+  <img src="public/vito/vito.png" width="120" alt="Vito, the vitonomi mascot" />
 </p>
 
 Vito is the vitonomi mascot: a hardworking forest ant who carries a

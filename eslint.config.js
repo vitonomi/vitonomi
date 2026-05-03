@@ -15,7 +15,6 @@ export default tseslint.config(
       '**/*.config.mjs',
       // Astro files are type-checked by `astro check`, not ESLint.
       '**/*.astro',
-      'landing/**',
     ],
   },
   ...tseslint.configs.recommendedTypeChecked,

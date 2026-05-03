@@ -14,15 +14,19 @@ inside the public repo.
 
 - **`github.com/vitonomi/vitonomi`** — the public, AGPL-3.0 repository.
   Contains every component a user runs: vault daemon, hub server,
-  vitonomi-mx SMTP relay, the PWA client, the CLI, the landing site,
-  and the shared library that ties them together. Everything in this
-  doc set documents this repo.
+  vitonomi-mx SMTP relay, the PWA client, the CLI, and the shared
+  library that ties them together. Everything in this doc set documents
+  this repo.
 - **`github.com/vitonomi/cloud`** — the private, proprietary repository.
   Contains only the hosted-service-specific layer: subscription
   billing, treasury management, internal analytics, and infrastructure-
   as-code for the hosted deployment of `vito.gg`. It depends on the
   AGPL hub through its public APIs only — there is no special
   hosted-only fork of the hub binary.
+
+- **`github.com/vitonomi/website`** — the public, AGPL-3.0 repository
+  for the vitonomi.com landing site (Astro). Standalone — no dependency
+  on `@vitonomi/core` or any other workspace package.
 
 The split exists so that:
 
@@ -31,6 +35,8 @@ The split exists so that:
 2. Hosted-service-specific commercial logic (Stripe, plan gating,
    cost-basis accounting, infra-as-code) stays out of the AGPL
    surface to keep the open-source product cleanly defined.
+3. The landing site has its own release cadence and deployment
+   pipeline, independent of the platform packages.
 
 ## Public-repo workspaces
 
@@ -43,7 +49,6 @@ vitonomi/
   hub/          hub control-plane server — bin: vitonomi-hub
   mx/           vitonomi-mx SMTP relay — bin: vitonomi-mx
   cli/          user-facing `vitonomi` command — dispatches to daemon bins
-  landing/      Astro static site for vitonomi.com
   clients/
     web/        PWA (Next.js, mobile-ready) — MVP
     mobile/     React Native iOS + Android — v1.1+ (not scaffolded)
@@ -55,6 +60,9 @@ The `clients/` directory is the only category prefix in the layout. It
 exists because there will be N sibling client surfaces (PWA, mobile,
 browser extensions). Every other workspace is a singleton at the top
 level.
+
+> The landing site (vitonomi.com) lives in its own repository at
+> `github.com/vitonomi/website`.
 
 ## Workspace dependency graph
 
@@ -91,18 +99,18 @@ auditable location.
 
 ## Tooling
 
-| Concern       | Choice                                            |
-| ------------- | ------------------------------------------------- |
-| Language      | TypeScript 5.6+ strict, no `any`                  |
-| Module system | ES modules (NodeNext), no CommonJS                |
-| Workspaces    | npm workspaces (not pnpm)                         |
-| Build         | TypeScript project references via `tsc -b`        |
-| Test runner   | Vitest                                            |
-| Linter        | ESLint flat config (typescript-eslint + import)   |
-| Formatter     | Prettier (with prettier-plugin-astro for landing) |
-| Pre-commit    | Husky + lint-staged                               |
-| CI            | GitHub Actions, Node 20 + 22 matrix               |
-| OpenAPI       | spectral lint                                     |
+| Concern       | Choice                                          |
+| ------------- | ----------------------------------------------- |
+| Language      | TypeScript 5.6+ strict, no `any`                |
+| Module system | ES modules (NodeNext), no CommonJS              |
+| Workspaces    | npm workspaces (not pnpm)                       |
+| Build         | TypeScript project references via `tsc -b`      |
+| Test runner   | Vitest                                          |
+| Linter        | ESLint flat config (typescript-eslint + import) |
+| Formatter     | Prettier                                        |
+| Pre-commit    | Husky + lint-staged                             |
+| CI            | GitHub Actions, Node 20 + 22 matrix             |
+| OpenAPI       | spectral lint                                   |
 
 The Node version is pinned in `.nvmrc` and `engines` (≥20).
 
@@ -120,7 +128,6 @@ npm run dev -w @vitonomi/clients/web     # PWA dev server
 npm run dev -w @vitonomi/hub             # hub dev server
 npm run dev -w @vitonomi/vault           # vault dev server
 npm run dev -w @vitonomi/mx              # mx dev server
-npm run dev -w @vitonomi/landing         # landing dev server
 ```
 
 ## Cross-references

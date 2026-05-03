@@ -7,4 +7,3 @@ coverage
 .claude/
 package-lock.json
 .astro/
-landing/dist/

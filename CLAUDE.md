@@ -2,8 +2,8 @@
 
 AGPL-3.0 self-hostable storage platform for sensitive personal data:
 credentials and email aliases at MVP, more types in v1.1+. Vault daemon,
-hub server, vitonomi-mx SMTP relay, PWA client, CLI, and landing site all
-live here. See workspace `../CLAUDE.md` and `../PROJECT.md` for the
+hub server, vitonomi-mx SMTP relay, PWA client, and CLI all live here.
+The landing site lives in its own repo at `github.com/vitonomi/website`. See workspace `../CLAUDE.md` and `../PROJECT.md` for the
 13-phase plan and glossary.
 
 ## Critical boundaries
@@ -52,7 +52,6 @@ mx/             ← vitonomi-mx SMTP relay (Phase 8+): log-free, RAM-only
 cli/            ← `vitonomi` CLI: wraps vault/hub/mx subcommands + recovery
   src/
   tests/
-landing/        ← Astro static site for vitonomi.com
 clients/        ← client surfaces (PWA, mobile, extensions)
   web/          ← PWA (Next.js, mobile-ready) — MVP
     src/
@@ -86,7 +85,6 @@ npm run dev -w @vitonomi/web      # PWA
 npm run dev -w @vitonomi/hub      # hub
 npm run dev -w @vitonomi/vault    # vault
 npm run dev -w @vitonomi/mx    # mx
-npm run dev -w @vitonomi/landing  # landing
 ```
 
 ## Code style
