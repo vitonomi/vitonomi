@@ -1,0 +1,13 @@
+# Workspace-level cargo config.
+#
+# Note: `-D warnings` is intentionally NOT set here. CI applies it
+# (see `.github/workflows/ci.yml`) so deny-on-warn is the gate that
+# blocks merges, but local `cargo build` / `cargo test` doesn't break
+# on a stray clippy nit during iteration.
+
+[net]
+git-fetch-with-cli = true
+
+[term]
+verbose = false
+color = "auto"

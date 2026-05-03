@@ -53,11 +53,14 @@ Ed25519, no X25519. No harvest-now-decrypt-later risk.
 ## Status
 
 Pre-MVP. The repo is under active development on a public 13-phase
-roadmap. Phase 0 (tooling, workspaces, CI), Phase 0.1 (landing site),
-and most of Phase 0.5 (post-pivot restructure: AGPL relicense, new
-`vault/`/`hub/`/`mx/` workspace stubs, `web/` → `clients/web/` move,
-spec-suite foundation in `docs/`) are complete. Phase 1 (`core/`
-foundations) is next.
+roadmap. Phase 0 (TypeScript tooling bootstrap) is **superseded** by
+Phase 0.2 (Rust workspace bootstrap) following the language pivot to
+**Rust** for every binary (only the PWA at `clients/web/` is
+TypeScript). Phase 0.1 (landing site) and most of Phase 0.5 (post-pivot
+restructure: AGPL relicense, new `vault/`/`hub/`/`mx/` workspace stubs,
+`web/` → `clients/web/` move, spec-suite foundation in `docs/`) are
+complete. The mini-MVP slice (auth + networking across `core/`,
+`hub/`, `vault/`, and `clients/cli/`) is the next active work.
 
 The full plan lives in the workspace-level `PROJECT.md`. Each phase
 has a clear deliverable list and verification gate.
@@ -69,43 +72,51 @@ This is the **public** AGPL-3.0 repository. The private repository at
 layer (Stripe billing, treasury, internal analytics, infra-as-code)
 and consumes this repo through its public APIs.
 
-| Package        | Purpose                                                                         |
-| -------------- | ------------------------------------------------------------------------------- |
-| `core/`        | Shared library — crypto, types, protocol interfaces, snapshot chain.            |
-| `vault/`       | Vault daemon. `vitonomi-vault` binary. Phase 3 stub today.                      |
-| `hub/`         | Hub control-plane server. `vitonomi-hub` binary. Phase 4 stub today.            |
-| `mx/`          | `vitonomi-mx` SMTP relay. Log-free, RAM-only. Phase 8 stub today.               |
-| `cli/`         | User-facing `vitonomi` CLI; dispatches to daemon binaries plus recovery.        |
-| `clients/web/` | Next.js App Router PWA. Phase 6 scaffold.                                       |
-| `clients/`     | Reserved for future client surfaces (mobile, browser extensions in v1.1+).      |
-| `docs/`        | Specification suite (CC-BY-4.0). [docs/README.md](docs/README.md) is the index. |
+| Package        | Language     | Purpose                                                                         |
+| -------------- | ------------ | ------------------------------------------------------------------------------- |
+| `core/`        | Rust         | Shared crate — crypto, types, protocol traits, snapshot chain.                  |
+| `core-wasm/`   | Rust → WASM  | wasm-bindgen bridge consumed by `clients/web` (added with PWA work).            |
+| `vault/`       | Rust         | Vault daemon. `vitonomi-vault` binary. Phase 3+.                                |
+| `hub/`         | Rust         | Hub control-plane server. `vitonomi-hub` binary. Phase 4+.                      |
+| `mx/`          | Rust         | `vitonomi-mx` SMTP relay. Log-free, RAM-only. Phase 8+.                         |
+| `vito-cli/`    | Rust         | `vito` CLI — thin helper to install and manage vitonomi modules.                |
+| `clients/cli/` | Rust         | `vitonomi-cli` — full CLI client for credentials, aliases, recovery.            |
+| `clients/web/` | TypeScript   | Next.js App Router PWA. Only TypeScript surface in the project.                 |
+| `clients/`     | (future)     | Reserved for mobile + browser extensions in v1.1+.                              |
+| `docs/`        | —            | Specification suite (CC-BY-4.0). [docs/README.md](docs/README.md) is the index. |
 
-Everything runs on npm workspaces from the repo root.
+Rust crates live in a single Cargo workspace at the repo root;
+`clients/web/` is the only npm workspace member.
 
 ## Quick start
 
-Requirements: Node 20+ and npm 10+.
+Requirements: Rust toolchain (auto-installed from `rust-toolchain.toml`)
+and Node 20+ for `clients/web`.
 
 ```bash
 git clone https://github.com/vitonomi/vitonomi.git
 cd vitonomi
-npm install
 
-npm test          # Vitest across all workspaces
-npm run lint      # ESLint flat config
-npm run typecheck # tsc -b across project references
-npm run build     # build every workspace
+# Rust binaries
+rustup show
+cargo check --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+
+# PWA (TypeScript)
+cd clients/web && npm install && npm run dev
 ```
 
-Run the CLI banner (Phase 0 placeholder):
+Run a binary (Phase 0 placeholder; real config + ports come with
+Phase 0.2):
 
 ```bash
-npm start -w @vitonomi/cli
+cargo run -p vito-cli -- --help
 ```
 
-Daemon stubs (`vault`, `hub`, `mx`) currently exit with a
-"Phase N stub — see PROJECT.md" message. Real implementations land
-in their respective phases.
+Daemon stubs (`vault`, `hub`, `mx`) currently print a banner and exit.
+Real implementations land in their respective phases.
 
 ## Documentation
 

@@ -1,0 +1,77 @@
+[package]
+name = "vitonomi-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "vitonomi shared crate — crypto, types, protocol traits."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Test-only Argon2id profile (m=8 MiB, t=1) for fast suites; production
+# builds MUST NOT enable this. A CI guard test asserts the prod profile
+# (m≥256 MiB) when this feature is off.
+test-crypto = []
+
+[dependencies]
+# Errors
+thiserror = "2"
+
+# Serde + binary encodings
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+ciborium = "0.2"
+
+# Encodings + constant-time
+base64 = "0.22"
+hex = "0.4"
+subtle = "2.6"
+
+# Secret hygiene
+zeroize = { version = "1.8", features = ["derive"] }
+
+# Randomness
+getrandom = { version = "0.2", features = ["std"] }
+
+# Hashing + KDF
+sha2 = "0.10"
+hkdf = "0.12"
+# blake3 reserved for chunk addressing (Autonomi-compat); added when
+# chunk-store work begins. Recent blake3 versions require edition2024
+# which lands in Rust 1.85+; we'll bump MSRV at that point.
+
+# Symmetric crypto
+chacha20poly1305 = "0.10"
+argon2 = "0.5"
+
+# Post-quantum (RustCrypto pure-Rust crates). The `pqcrypto` family
+# wraps PQClean's C implementations which use NEON intrinsics that
+# segfault on Cortex-A72 (Pi 4). RustCrypto is portable + slightly
+# slower but correct on every aarch64 CPU. Both crates also expose
+# deterministic seeded keygen via FIPS-internal `key_gen_internal`,
+# which we'll use when the seed-phrase recovery path is wired up.
+ml-dsa = "0.1.0-rc.9"
+ml-kem = "0.3"
+signature = "2"
+rand_core = { version = "0.9", features = ["os_rng"] }
+
+# Mnemonic
+bip39 = "2.1"
+
+# Async runtime + traits
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
+
+# Tracing (observability)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt"] }
+
+[dev-dependencies]
+proptest = "1.5"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }

@@ -87,12 +87,16 @@ is reviewed.
 
 ### Supply-chain attack
 
-- **Capability.** Malicious npm dependency, compromised CI, malicious
-  PR.
-- **Defences (sketch).** Version-pinned dependencies with integrity
-  digests; SLSA Level 3 provenance for `vitonomi-mx` releases;
-  dependency review on every PR; secret scanning in CI; reproducible
-  builds for security-critical binaries.
+- **Capability.** Malicious crates.io dependency, malicious npm
+  dependency in `clients/web`, compromised CI, malicious PR.
+- **Defences (sketch).** Workspace-wide dependency pins via
+  `Cargo.lock` committed to the repo; `cargo deny` with a strict
+  license allow-list + advisory blocklist + per-crate dependency
+  bans (encryption-boundary lint); `cargo audit` on every PR;
+  SLSA Level 3 provenance for `vitonomi-mx` releases; npm
+  `package-lock.json` committed for `clients/web` with `npm audit`
+  in CI; secret scanning in CI; reproducible builds for
+  security-critical binaries.
 
 ### Quantum adversary (CRQC — cryptographically relevant quantum computer)
 

@@ -1,7 +1,12 @@
 # Dependencies
 node_modules/
 
-# Build output
+# Rust build output
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# JS/TS build output (clients/web only)
 dist/
 .next/
 out/

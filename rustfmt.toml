@@ -1,0 +1,17 @@
+# vitonomi rustfmt config — single source of truth, applies to every
+# member crate. Run `cargo fmt --check` in CI; fail on any drift.
+#
+# Only stable-channel options are listed here so MSRV-stable formatters
+# don't warn. Unstable options (imports_granularity, group_imports,
+# overflow_delimited_expr, struct_lit_single_line, etc.) can be added
+# when we move the formatter to nightly via a `format` workflow step.
+
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+edition = "2021"
+newline_style = "Unix"
+use_small_heuristics = "Default"
+reorder_imports = true
+reorder_modules = true
+match_block_trailing_comma = false

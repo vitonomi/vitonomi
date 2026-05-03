@@ -1,0 +1,89 @@
+# cargo-deny — license + advisory + dependency audit for the
+# vitonomi workspace.
+#
+# Run via `cargo deny check` (CI runs this on every PR).
+
+[graph]
+all-features = true
+no-default-features = false
+exclude = []
+
+[output]
+feature-depth = 1
+
+# Security advisories — fail the build on anything not explicitly
+# allowed.
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+# License allow-list — AGPL-3.0 is the project license; we accept
+# only licenses compatible with it for direct + transitive deps.
+[licenses]
+confidence-threshold = 0.93
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "AGPL-3.0",
+    "AGPL-3.0-only",
+]
+exceptions = []
+
+# Sources — only crates.io and our own git repos.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+# Encryption boundary lint — daemons + CLIs must NEVER directly depend
+# on raw crypto crates. They go through the `core` crate.
+#
+# This block expands as the workspace grows; each new daemon /
+# CLI crate gets a `wrappers` entry below to enforce the boundary.
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+# These crates are restricted to the `core` crate (and its WASM
+# bridge `core-wasm`). Any other workspace member that direct-depends
+# on them fails `cargo deny check`.
+[[bans.deny]]
+name = "pqcrypto-mldsa"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
+
+[[bans.deny]]
+name = "pqcrypto-mlkem"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
+
+[[bans.deny]]
+name = "chacha20poly1305"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
+
+[[bans.deny]]
+name = "argon2"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
+
+[[bans.deny]]
+name = "hkdf"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
+
+[[bans.deny]]
+name = "sha2"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
+
+[[bans.deny]]
+name = "bip39"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]

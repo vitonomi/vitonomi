@@ -29,9 +29,10 @@ Five concrete, non-negotiable commitments:
    transformation.
 4. **Self-encryption library is upstream Autonomi code.** vitonomi
    does not implement self-encryption itself. We depend on the
-   pinned upstream library version (see "Version pin" below).
-   **Forking is forbidden.** If the upstream library has a bug, we
-   fix it upstream.
+   pinned upstream Rust crate `self_encryption` (see "Version pin"
+   below). Because both projects are Rust, integration is direct —
+   no JS port to maintain. **Forking is forbidden.** If the upstream
+   crate has a bug, we fix it upstream.
 5. **The vault chunk store IS an Autonomi-format object store.**
    Just running on a single host. Same content addresses, same
    byte layout. The only difference between "stored on a vitonomi
@@ -71,20 +72,20 @@ the upgrade can land.
 
 ## The bridging interface
 
-`core/src/protocol/AutonomiBridge.ts` is the typed seam between
-vitonomi's storage layer and the Autonomi network. Its interface
-is:
+`core/src/protocol/autonomi_bridge.rs` is the typed seam between
+vitonomi's storage layer and the Autonomi network. Its trait is:
 
-```typescript
-interface AutonomiBridge {
-  pushChunks(addresses: ChunkAddress[]): Promise<void>;
-  fetchChunk(address: ChunkAddress): Promise<Uint8Array>;
+```rust
+#[async_trait]
+pub trait AutonomiBridge: Send + Sync {
+    async fn push_chunks(&self, addresses: &[ChunkAddress]) -> Result<()>;
+    async fn fetch_chunk(&self, address: &ChunkAddress) -> Result<Bytes>;
 }
 ```
 
-In MVP, this interface has a no-op in-memory implementation. In
-v1.1, it is wired to a real `@autonomi/client`. The interface
-shape is locked at Phase 1; the implementation is the v1.1 work.
+In MVP, this trait has a no-op in-memory implementation. In v1.1,
+it is wired to the real upstream `autonomi` crate. The trait
+signature is locked at Phase 1; the implementation is the v1.1 work.
 
 ## What is NOT compatible
 

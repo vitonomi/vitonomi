@@ -1,0 +1,6 @@
+[toolchain]
+# edition 2024 was stabilized in Rust 1.85; many modern crates
+# (base64ct, blake3 1.8+) require it.
+channel = "1.85.0"
+components = ["rustfmt", "clippy", "rust-src"]
+profile = "default"

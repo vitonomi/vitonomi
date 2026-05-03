@@ -1,7 +1,7 @@
 ---
-formatVersion: 1
+formatVersion: 2
 status: stable
-last-reviewed: 2026-05-01
+last-reviewed: 2026-05-03
 ---
 
 # vitonomi monorepo topology
@@ -14,19 +14,18 @@ inside the public repo.
 
 - **`github.com/vitonomi/vitonomi`** — the public, AGPL-3.0 repository.
   Contains every component a user runs: vault daemon, hub server,
-  vitonomi-mx SMTP relay, the PWA client, the CLI, and the shared
-  library that ties them together. Everything in this doc set documents
-  this repo.
+  vitonomi-mx SMTP relay, the PWA client, the CLIs, and the shared
+  Rust crate that ties them together. Everything in this doc set
+  documents this repo.
 - **`github.com/vitonomi/cloud`** — the private, proprietary repository.
   Contains only the hosted-service-specific layer: subscription
   billing, treasury management, internal analytics, and infrastructure-
   as-code for the hosted deployment of `vito.gg`. It depends on the
   AGPL hub through its public APIs only — there is no special
   hosted-only fork of the hub binary.
-
 - **`github.com/vitonomi/website`** — the public, AGPL-3.0 repository
   for the vitonomi.com landing site (Astro). Standalone — no dependency
-  on `@vitonomi/core` or any other workspace package.
+  on `vitonomi-core` or any other workspace crate.
 
 The split exists so that:
 
@@ -38,28 +37,39 @@ The split exists so that:
 3. The landing site has its own release cadence and deployment
    pipeline, independent of the platform packages.
 
-## Public-repo workspaces
+## Public-repo workspace layout
 
-The public repo is an npm workspaces monorepo:
+The public repo is a **Cargo workspace** for the Rust crates plus a
+trimmed **npm workspace** for the PWA:
 
 ```
 vitonomi/
-  core/         shared library — crypto, types, protocol interfaces
-  vault/        vault daemon — bin: vitonomi-vault
-  hub/          hub control-plane server — bin: vitonomi-hub
-  mx/           vitonomi-mx SMTP relay — bin: vitonomi-mx
-  cli/          user-facing `vitonomi` command — dispatches to daemon bins
+  Cargo.toml         ← Rust workspace manifest (all binaries below)
+  package.json       ← npm workspace, declares `clients/web` only
+  rust-toolchain.toml
+  rustfmt.toml
+  clippy.toml
+  deny.toml
+  .cargo/config.toml
+  core/              shared Rust crate — crypto, types, protocol traits
+  core-wasm/         (added when PWA work begins) wasm-bindgen bridge
+  vault/             vault daemon — bin: vitonomi-vault
+  hub/               hub control-plane server — bin: vitonomi-hub
+  mx/                vitonomi-mx SMTP relay — bin: vitonomi-mx
+  vito-cli/          `vito` Rust binary — thin helper to install/manage modules
   clients/
-    web/        PWA (Next.js, mobile-ready) — MVP
-    mobile/     React Native iOS + Android — v1.1+ (not scaffolded)
-    ext/        browser extensions — v1.1+ (not scaffolded)
-  docs/         specification suite (this directory)
+    cli/             `vitonomi-cli` Rust binary — full CLI client
+    web/             PWA (Next.js, TypeScript) — MVP. Only TS surface.
+    mobile/          React Native iOS + Android — v1.1+ (not scaffolded)
+    ext/             browser extensions — v1.1+ (not scaffolded)
+  docs/              specification suite (this directory)
+  tests/             top-level workspace integration tests
 ```
 
 The `clients/` directory is the only category prefix in the layout. It
 exists because there will be N sibling client surfaces (PWA, mobile,
-browser extensions). Every other workspace is a singleton at the top
-level.
+browser extensions). Every other workspace crate is a singleton at the
+top level.
 
 > The landing site (vitonomi.com) lives in its own repository at
 > `github.com/vitonomi/website`.
@@ -67,67 +77,94 @@ level.
 ## Workspace dependency graph
 
 ```
+core ◄── core-wasm   (wasm-bindgen bridge for clients/web)
 core ◄── vault
 core ◄── hub
 core ◄── mx
-core ◄── cli
-core ◄── clients/web
+core ◄── vito-cli
+core ◄── clients/cli
 
-cli ──► (execs daemon binaries via `vitonomi vault start`, etc.)
+vito-cli ──► (installs modules, interacts with vitonomi-cli)
+clients/web ──► core-wasm  (npm dependency, built from Rust)
 ```
 
-`core/` has no internal dependencies on other workspaces. Every other
-package depends on `core` and only on `core`.
+The `core` crate has no internal dependencies on other workspace
+crates. Every other Rust binary depends on `core` and only on `core`
+(plus shared third-party crates). The PWA (`clients/web`) depends on
+the WASM build of `core` via `core-wasm`.
 
 ## Per-package layout
 
-Each workspace follows the same canonical shape:
+Each Rust crate follows the same canonical shape:
 
 ```
-<package>/
-  src/                         implementation
-  tests/                       sibling test directory (not colocated)
-  package.json                 strict exports map; no default exports
-  tsconfig.json                extends ../tsconfig.base.json
-  README.md                    purpose, install, dev, test, gotchas
-  CLAUDE.md                    agent-facing rules for this package
+<crate>/
+  Cargo.toml         strict; inherits from workspace lints + dependencies
+  src/               implementation
+    lib.rs           public re-exports + crate-level docs (libraries)
+    main.rs          thin entrypoint calling lib::run() (binaries)
+    cli.rs           clap::Parser definitions (binaries)
+    config.rs        figment-loaded TOML config + serde struct
+    ...              submodules
+  tests/             integration tests (sibling directory)
+  README.md          purpose, install, dev, test, gotchas
+  CLAUDE.md          agent-facing rules for this crate
 ```
 
 Tests live in a sibling `tests/` directory rather than colocated with
-source so that `tests/security/` (for crypto packages) is a single,
+source so that `tests/security/` (for crypto crates) is a single,
 auditable location.
+
+The PWA at `clients/web/` follows Next.js conventions (TypeScript,
+ESLint, vitest, etc.) and is unaffected by the Rust pivot.
 
 ## Tooling
 
-| Concern       | Choice                                          |
-| ------------- | ----------------------------------------------- |
-| Language      | TypeScript 5.6+ strict, no `any`                |
-| Module system | ES modules (NodeNext), no CommonJS              |
-| Workspaces    | npm workspaces (not pnpm)                       |
-| Build         | TypeScript project references via `tsc -b`      |
-| Test runner   | Vitest                                          |
-| Linter        | ESLint flat config (typescript-eslint + import) |
-| Formatter     | Prettier                                        |
-| Pre-commit    | Husky + lint-staged                             |
-| CI            | GitHub Actions, Node 20 + 22 matrix             |
-| OpenAPI       | spectral lint                                   |
+| Concern        | Choice                                                            |
+| -------------- | ----------------------------------------------------------------- |
+| Language       | Rust edition 2021 (binaries) + TypeScript (PWA only)              |
+| Async runtime  | `tokio`                                                           |
+| Workspaces     | Cargo workspace (Rust) + npm workspaces (just `clients/web`)      |
+| Build          | `cargo build --workspace`                                         |
+| Test runner    | `cargo test` + `cargo nextest run` (optional, for parallelism)    |
+| Linter         | `clippy` (workspace-wide pedantic + custom lints)                 |
+| Formatter      | `rustfmt`                                                         |
+| Dep / license  | `cargo deny` (license allow-list + per-crate dependency bans)     |
+| Advisories     | `cargo audit`                                                     |
+| Pre-commit     | `cargo fmt --check` + `cargo clippy` + `cargo test --lib`         |
+| CI             | GitHub Actions, Linux x64 + Linux ARM64 matrix (covers the Pi)    |
+| OpenAPI lint   | `spectral`                                                        |
+| PWA build      | `next build` inside `clients/web` (separate from cargo)           |
+| WASM bridge    | `wasm-pack build --target web` against `core-wasm/`               |
+| Coverage       | `cargo-llvm-cov` (95% on `core::crypto::**`, 80% elsewhere)       |
 
-The Node version is pinned in `.nvmrc` and `engines` (≥20).
+The Rust toolchain version is pinned in `rust-toolchain.toml` and
+enforced by `clippy.toml`'s `msrv` setting.
 
 ## Build commands
 
 Per-workspace, run from the repo root:
 
 ```bash
-npm install                              # install everything
-npm run typecheck                        # tsc -b across all workspaces
-npm run lint                             # ESLint across the repo
-npm run format                           # Prettier write
-npm test                                 # Vitest across all workspaces
-npm run dev -w @vitonomi/clients/web     # PWA dev server
-npm run dev -w @vitonomi/hub             # hub dev server
-npm run dev -w @vitonomi/vault           # vault dev server
-npm run dev -w @vitonomi/mx              # mx dev server
+# Setup
+rustup show                              # installs the pinned toolchain
+
+# Type / build / lint / test
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+cargo test --workspace
+cargo deny check
+cargo audit
+
+# Dev runs (each binary reads ~/.config/vitonomi/<bin>.toml by default)
+cargo run -p vitonomi-hub   -- start
+cargo run -p vitonomi-vault -- start
+cargo run -p vitonomi-mx    -- start
+cargo run -p vitonomi-cli   -- status
+
+# PWA (TypeScript, npm workspace)
+cd clients/web && npm install && npm run dev
 ```
 
 ## Cross-references

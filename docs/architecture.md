@@ -27,13 +27,16 @@ user typically runs ≥2 vaults for replication.
 
 - **Role.** Persistent encrypted storage. Each chunk is content-
   addressed in Autonomi 2.0 format.
-- **Language.** TypeScript on Node ≥20.
-- **Storage.** SQLite for chunk-metadata index; filesystem for
-  raw encrypted chunk bytes (sharded directory layout matching
-  Autonomi's recommended on-disk shape).
-- **Network.** Speaks libp2p (QUIC + Noise) to peer vaults and to
-  clients. Dials the hub outbound (websocket/QUIC) for
-  control-plane traffic — never accepts inbound from the hub.
+- **Language.** Rust edition 2021, MSRV pinned in
+  `rust-toolchain.toml`. Async via `tokio`.
+- **Storage.** SQLite (via `sqlx` with compile-time-checked queries)
+  for chunk-metadata index; filesystem for raw encrypted chunk bytes
+  (sharded directory layout matching Autonomi's recommended on-disk
+  shape).
+- **Network.** Speaks libp2p-rs (QUIC + Noise) to peer vaults and to
+  clients (target). Dials the hub outbound (currently
+  WebSocket-over-TLS via `tokio-tungstenite`; libp2p-rs upgrade in a
+  later phase) — never accepts inbound from the hub.
 - **What it can read.** Nothing. Chunks are AEAD-then-self-encrypted
   client-side; the vault holds opaque bytes.
 - **What it cannot read.** User content, user metadata, encryption
@@ -48,11 +51,14 @@ clients and vaults (libp2p rendezvous).
 
 - **Role.** Coordination, discovery, opaque-blob storage, NAT-traversal
   rendezvous.
-- **Language.** TypeScript on Node ≥20. Fastify (or Hono).
-- **Storage.** PostgreSQL (multi-tenant hosted) or SQLite (single-
-  user self-hosted).
+- **Language.** Rust edition 2021. `axum` web framework on `tokio`,
+  with `tower` / `tower-http` middleware and `rustls` for TLS.
+- **Storage.** PostgreSQL (multi-tenant hosted) or SQLite
+  (single-user self-hosted), via `sqlx` with compile-time-checked
+  queries.
 - **Network.** HTTP/HTTPS for the OpenAPI client surface; persistent
-  websocket/QUIC inbound from vaults; authenticated push from mx.
+  WebSocket inbound from vaults via `axum`'s `ws` module
+  (length-prefixed CBOR frames); authenticated push from mx.
 - **What it can read.** Opaque encrypted blobs, plaintext metadata
   (vault multiaddrs, alias pubkeys, plan tier, last-seen timestamps,
   byte-count usage).
@@ -68,7 +74,8 @@ pushed to the recipient's hub as ciphertext. The mx process never
 writes plaintext to disk and never logs message content.
 
 - **Role.** SMTP receiver + on-the-fly encrypt-and-forward.
-- **Language.** TypeScript on Node ≥20.
+- **Language.** Rust edition 2021 (`tokio` async runtime; SMTP via
+  a Rust SMTP crate, encryption via the `core` crate).
 - **Storage.** None. Stateless.
 - **Network.** Inbound SMTP on port 25 (and submission on 587 for
   v1.1 outbound). Outbound: authenticated push to the hub.
@@ -84,17 +91,24 @@ User-facing applications that hold the user's keys, drive
 encryption/decryption, and present UI.
 
 - **`clients/web`** — Next.js App Router PWA, mobile-ready,
-  installable. Argon2id runs in a Web Worker; libp2p uses
-  WebTransport (primary) or WebRTC (fallback) to reach the user's
-  main vault.
-- **`cli`** — `vitonomi` CLI. Dispatches subcommands to daemon
-  binaries (`vitonomi vault start` execs `vitonomi-vault start`).
-  Recovery commands (`vitonomi recover --seed`) run in-process
-  with only `core/` as a dependency.
+  installable. **TypeScript** (the only TS surface in the project).
+  Argon2id and PQ crypto run in a Web Worker, using a WASM build of
+  the Rust `core` crate (`core-wasm/`) — no parallel JS crypto
+  implementation. libp2p-rs (compiled to WASM) uses WebTransport
+  (primary) or WebRTC (fallback) to reach the user's main vault.
+- **`clients/cli`** — `vitonomi-cli` Rust binary. Standalone tool
+  that depends on the `core` crate. Recovery commands
+  (`vitonomi-cli cluster restore`) re-derive keys from the seed
+  phrase via `core`.
+- **`vito-cli`** — `vito` Rust binary; thin helper CLI that
+  installs/manages vitonomi modules and dispatches to the
+  user-facing daemons.
 - **`clients/mobile`** (v1.1+) — React Native iOS + Android, sharing
-  `core/` for crypto and protocol.
+  the WASM-compiled Rust `core` crate (or, where possible, native
+  bindings via UniFFI / `napi-rs`) for crypto and protocol.
 - **`clients/ext`** (v1.1+) — Browser extensions for credential
-  autofill (Chrome + Firefox manifests; same code).
+  autofill (Chrome + Firefox manifests; same TypeScript code,
+  consuming the same `core-wasm` package).
 
 ### Autonomi network
 
@@ -225,8 +239,11 @@ flow with primitive-level detail.
   via signed invite tokens. Members hold their own encryption keys;
   the admin can see aggregated usage but cannot decrypt member
   content.
-- **libp2p transport.** QUIC primary, WebTransport for browsers,
-  WebRTC fallback. Hub-mediated rendezvous for NAT traversal.
+- **libp2p-rs transport.** QUIC primary, WebTransport for browsers
+  (compiled to WASM), WebRTC fallback. Hub-mediated rendezvous for
+  NAT traversal. Mini-MVP and early phases use plain
+  WebSocket-over-TLS via `tokio-tungstenite` — the swap to libp2p-rs
+  is a single constructor change at the `VaultBus` trait boundary.
 - **Self-hosted parity.** Every feature works without vitonomi
   infrastructure. The hosted offering is one deployment of the same
   AGPL binaries.

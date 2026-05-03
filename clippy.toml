@@ -1,0 +1,20 @@
+# vitonomi clippy config — pinned alongside `rust-toolchain.toml`.
+# Workspace-wide lint levels live in the [workspace.lints] table of
+# Cargo.toml; this file holds clippy options that don't fit there.
+
+msrv = "1.85.0"
+avoid-breaking-exported-api = false
+allow-print-in-tests = true
+allow-dbg-in-tests = false
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true
+
+# Enforce specific named bans across the workspace. Crypto crates that
+# need `getrandom` directly opt out per-file with
+# `#[allow(clippy::disallowed_methods)]` (currently only
+# `core::crypto::random`).
+disallowed-methods = [
+    { path = "std::env::var",                reason = "use core::config instead" },
+    { path = "std::process::exit",           reason = "return Result; bin entrypoints exit at the outer edge" },
+]

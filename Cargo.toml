@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+
+# Member crates are added incrementally as each phase begins. Step 0
+# bootstraps the workspace with a placeholder `core` crate; Step 1
+# fills `core` with real code; later steps add `vault`, `hub`,
+# `clients/cli`, etc. See ../PROJECT.md and ~/.claude/plans/ for the
+# work breakdown.
+members = ["core"]
+exclude = ["clients/web", "clients/mobile", "clients/ext"]
+
+[workspace.package]
+version = "0.0.0"
+license = "AGPL-3.0-only"
+edition = "2021"
+rust-version = "1.85"
+authors = ["vitonomi contributors"]
+repository = "https://github.com/vitonomi/vitonomi"
+homepage = "https://vitonomi.com"
+
+# Workspace-wide lints — every member crate inherits these by adding
+# `[lints] workspace = true` to its Cargo.toml.
+[workspace.lints.rust]
+unsafe_code = "deny"
+# missing_docs is intentionally not deny-by-default for the early
+# work; we'll bump it to "warn" once the crates stabilise.
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# `pedantic` is intentionally not enabled workspace-wide for the
+# early implementation phase; we keep the strict-but-pragmatic
+# subset that protects correctness and boundaries. Re-enable
+# pedantic + bump these to "deny" for the hardening pass
+# (PROJECT.md Phase 11).
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "deny"
+todo = "warn"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+
+# Release profile: aggressive optimisation for daemon binaries.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+# Faster dev builds for incremental work.
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+
+# Test profile inherits dev defaults but with debug-info on for
+# better backtraces.
+[profile.test]
+opt-level = 0
+debug = true

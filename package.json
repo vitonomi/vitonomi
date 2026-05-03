@@ -2,57 +2,19 @@
   "name": "vitonomi",
   "version": "0.0.0",
   "private": true,
-  "description": "vitonomi — privacy-first, self-hostable storage platform for sensitive personal data",
+  "description": "vitonomi — privacy-first, self-hostable storage platform. Rust workspace; npm workspace declares clients/web only.",
   "license": "AGPL-3.0-only",
   "type": "module",
   "engines": {
     "node": ">=20.0.0"
   },
   "workspaces": [
-    "core",
-    "vault",
-    "hub",
-    "mx",
-    "cli",
-    "clients/*"
+    "clients/web"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "typecheck": "tsc -b --pretty",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "spec:lint": "spectral lint docs/api-spec.yaml",
-    "prepare": "husky || true"
-  },
-  "lint-staged": {
-    "*.{ts,tsx,js,mjs,cjs}": [
-      "eslint --fix",
-      "prettier --write"
-    ],
-    "*.{json,yaml,yml,md}": [
-      "prettier --write"
-    ]
+    "spec:lint": "spectral lint docs/api-spec.yaml"
   },
   "devDependencies": {
-    "@stoplight/spectral-cli": "^6.11.1",
-    "@types/node": "^22.7.4",
-    "@typescript-eslint/eslint-plugin": "^8.8.0",
-    "@typescript-eslint/parser": "^8.8.0",
-    "@vitest/coverage-v8": "^2.1.2",
-    "eslint": "^9.12.0",
-    "eslint-plugin-import": "^2.31.0",
-    "globals": "^15.10.0",
-    "husky": "^9.1.6",
-    "lint-staged": "^15.2.10",
-    "prettier": "^3.3.3",
-    "tsx": "^4.19.1",
-    "typescript": "^5.6.2",
-    "typescript-eslint": "^8.8.0",
-    "vitest": "^2.1.2"
+    "@stoplight/spectral-cli": "^6.11.1"
   }
 }
