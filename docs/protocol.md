@@ -1,26 +1,248 @@
 ---
-formatVersion: 0
-status: stub
-last-reviewed: 2026-05-01
+formatVersion: 1
+status: stable
+last-reviewed: 2026-05-03
 ---
 
 # Streaming wire protocols
 
-**Status: stub.** This document is reserved for Phase 3+ of the
-implementation plan and will be filled in then. See
-[README.md](README.md) for the suite reading order and the
-phase-mapping table for what lands when.
+This document specifies the vault ↔ hub streaming protocol that
+sits alongside the HTTP control plane in
+[`api-spec.yaml`](api-spec.yaml). The hub serves it on
+`wss://<hub>/v1/vault-bus`; vaults dial outbound and authenticate
+each connection with a signed challenge.
 
-Until this doc is written, the canonical reference for related
-content is:
+The mini-MVP transport is **WebSocket-over-TLS** via
+`tokio-tungstenite` + `rustls`. libp2p-rs is the v1.1+ target;
+swapping it in is a single constructor change at the
+`vitonomi-core::protocol::vault_bus::VaultBus` trait boundary —
+none of the frame layout below changes.
 
-- [architecture.md](architecture.md) for the conceptual model
-- [data-format.md](data-format.md) for byte layouts already specified
-- [autonomi-compat.md](autonomi-compat.md) for the Autonomi-format
-  commitment
+## Endpoint
 
-## Why this doc exists at status:stub
+| Field           | Value                                                    |
+| --------------- | -------------------------------------------------------- |
+| URL path        | `/v1/vault-bus`                                          |
+| Scheme          | `wss://` (TLS required; vault pins SPKI fingerprint)     |
+| Method          | HTTP `GET` upgrade to WebSocket                          |
+| Subprotocol     | `vitonomi.vault-bus.v1` (negotiated via `Sec-WebSocket-Protocol`) |
+| Auth            | First-frame signed challenge (no bearer token on the upgrade request) |
+| Frame format    | Length-prefixed CBOR — see [Frame format](#frame-format) |
+| Idle timeout    | 90 s wall-clock without an inbound or outbound frame     |
 
-The full spec suite cross-references every doc by name. Stub files
-keep the reference graph internally consistent (and the link
-checker happy) until the real content arrives.
+The hub TLS cert SPKI is bound into the vault's invite token at
+issue time (`hub_cert_fingerprint`). The vault's WebSocket client
+MUST verify the live leaf-cert SPKI matches the persisted
+fingerprint on every connect — system trust store is bypassed.
+
+## Frame format
+
+Every frame is a length-prefixed CBOR (RFC 8949 strict mode)
+encoded `BusFrame` value (defined below). On the WebSocket layer,
+each `BusFrame` is sent as a single **binary** message; text
+messages are an error.
+
+```text
+┌──────────────────────────────────────────┐
+│ length: u32 LE  │  cbor bytes (BusFrame) │
+└──────────────────────────────────────────┘
+```
+
+The `length` prefix is a 4-byte little-endian unsigned integer
+giving the byte length of the CBOR payload that follows.
+WebSocket framing already provides a length, but the prefix is
+mandatory so the same wire format works unchanged when the
+transport swaps to libp2p-rs (which uses raw bidirectional byte
+streams).
+
+**Maximum frame size: 64 KiB.** Larger frames are a protocol
+error and trigger an `Error` frame followed by close.
+
+## Frame schemas
+
+`BusFrame` is a tagged enum (`{ "kind": "...", ... }` JSON-style;
+on the wire CBOR encodes the `kind` discriminator using serde's
+default tagged-enum representation).
+
+```rust
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum BusFrame {
+    Challenge(ChallengeFrame),          // hub → vault
+    ChallengeResponse(ChallengeResponseFrame), // vault → hub
+    SessionEstablished(SessionEstablishedFrame), // hub → vault
+    Heartbeat(HeartbeatFrame),          // vault → hub
+    ChainAppend(ChainAppendFrame),      // hub → vault
+    Error(ErrorFrame),                  // either direction
+    Disconnect(DisconnectFrame),        // either direction
+}
+```
+
+The Rust struct definitions live at
+`vitonomi/core/src/protocol/wire/vault_bus.rs`. They are the
+authoritative byte layout — this document narrates them.
+
+### `Challenge` (hub → vault)
+
+```text
+ChallengeFrame {
+  challenge: {
+    nonce: bytes(32),
+    sent_at_ms: uint64,
+  }
+}
+```
+
+First frame from the hub on every successful upgrade. The vault
+MUST sign `nonce || sent_at_ms_be8` (32 + 8 bytes, big-endian
+timestamp suffix) with its persistent ML-DSA-65 secret key and
+respond with `ChallengeResponse`.
+
+### `ChallengeResponse` (vault → hub)
+
+```text
+ChallengeResponseFrame {
+  vault_id: bytes(16),
+  signature: bytes(~3309),  // ML-DSA-65 detached
+}
+```
+
+Hub looks up the stored `vault_pubkey` for `vault_id`, verifies
+the signature, and replies `SessionEstablished` on success or
+`Error` (then close) on failure.
+
+### `SessionEstablished` (hub → vault)
+
+```text
+SessionEstablishedFrame {
+  session_id: string,
+  chain_head: AdminChainEntry,
+}
+```
+
+`chain_head` is the latest admin-chain entry the hub knows about.
+The vault compares against its local chain copy: if the hub is
+behind, the vault SHOULD push missing entries via the HTTP
+`POST /v1/admin-chain/{cluster_id}` endpoint after the WebSocket
+handshake completes; if the vault is behind, it SHOULD fetch
+missing entries via `GET /v1/admin-chain/{cluster_id}` and verify
+every signature against its locally stored cluster admin pubkey.
+
+### `Heartbeat` (vault → hub)
+
+```text
+HeartbeatFrame {
+  vault_id: bytes(16),
+  ts_ms: uint64,
+  signature: bytes(~3309),  // ML-DSA-65 over (vault_id || ts_ms_be8)
+}
+```
+
+Vault sends one every **30 s** while connected. Hub updates
+`vaults.last_seen` on each verified heartbeat. A missed
+heartbeat for two intervals (60 s) marks the vault `offline` in
+the cluster directory.
+
+Heartbeats are signed because a passive observer with a hijacked
+TLS session could otherwise spoof "still online" forever; the
+signature ties each heartbeat to a fresh `ts_ms`.
+
+### `ChainAppend` (hub → vault)
+
+```text
+ChainAppendFrame {
+  entry: AdminChainEntry,
+}
+```
+
+Hub broadcasts a freshly accepted admin-chain entry (e.g. a new
+`vault-enroll` after another vault accepts) to every online
+vault. Receivers MUST verify the signature against the stored
+cluster admin pubkey AND verify hash-link continuity against the
+entry they currently hold as head before persisting.
+
+### `Error` (either direction)
+
+```text
+ErrorFrame {
+  code: string,        // e.g. "auth.signature_invalid"
+  message: string,
+}
+```
+
+Either side MAY send an `Error` frame followed by a `Disconnect`
+when the connection is unrecoverable. Common codes:
+
+| Code                          | Sender | Reason                                                  |
+| ----------------------------- | ------ | ------------------------------------------------------- |
+| `auth.signature_invalid`      | hub    | Challenge response did not verify against stored pubkey |
+| `auth.unknown_vault`          | hub    | `vault_id` not in cluster                               |
+| `auth.heartbeat_invalid`      | hub    | Heartbeat signature failed verification                 |
+| `auth.heartbeat_replay`       | hub    | `ts_ms` decreased relative to a previous heartbeat      |
+| `protocol.malformed`          | either | CBOR decode failure or schema mismatch                  |
+| `protocol.frame_too_large`    | either | Frame exceeded 64 KiB                                   |
+| `protocol.unsupported_kind`   | either | Frame kind not in this version's enum                   |
+| `chain.signature_invalid`     | vault  | `ChainAppend` entry's signature failed                  |
+| `chain.hash_link_break`       | vault  | `prev_hash` ≠ local head's hash                         |
+
+### `Disconnect` (either direction)
+
+```text
+DisconnectFrame {
+  reason: string,
+}
+```
+
+Graceful shutdown signal. Sender MAY follow with a WebSocket
+close (status code `1000`).
+
+## Reconnection
+
+Vaults reconnect with **exponential backoff capped at 60 s**:
+1, 2, 4, 8, 16, 32, 60, 60, 60, ... seconds between attempts.
+Backoff resets to 1 s on the first successfully established
+session (i.e. after `SessionEstablished` is received).
+
+On every reconnect the vault re-runs the full challenge handshake
+(no resumption). Sessions are not durable across hub restarts.
+
+## Concurrency
+
+A single `vault_id` MAY hold at most one active session. If the
+hub receives a successful `ChallengeResponse` while another
+session for the same `vault_id` is open, the hub closes the
+older session with `Disconnect { reason: "superseded" }` and
+keeps the new one. This handles the common case of a vault
+restart where the hub hasn't yet noticed the dropped TCP
+connection.
+
+## TLS pinning details
+
+The vault's invite token (see
+[`api-spec.yaml#InviteTokenBody`](api-spec.yaml)) carries
+`hub_cert_fingerprint` in the form
+`sha256:<base64url-no-padding>`. The fingerprint is the SHA-256
+of the leaf cert's **SPKI** (not the whole cert) — stable across
+cert renewal as long as the keypair is rotated separately.
+
+The vault MUST:
+1. Reject the connection if no certificate fingerprint is cached
+   AND no invite is present (i.e. before first enrollment).
+2. After enrollment, reject the connection if the leaf cert's
+   SPKI hash does not match the cached `hub_cert_fingerprint`.
+3. Skip system trust-store verification entirely (the embedded
+   fingerprint is the only trust anchor for vault ↔ hub).
+
+`hub_cert_fingerprint` is rewritten by `vitonomi-vault set-hub`
+when migrating to a new hub; the value comes from the new hub's
+admin-issued invite (or is supplied directly via
+`--fingerprint <fp>`).
+
+## Cross-references
+
+- HTTP control plane: [`api-spec.yaml`](api-spec.yaml).
+- Architecture overview: [`architecture.md`](architecture.md).
+- Admin-chain byte layout: [`data-format.md`](data-format.md).
+- Threat model — malicious hub / malicious vault:
+  [`threat-model.md`](threat-model.md).
+- Trait surface: `vitonomi-core::protocol::vault_bus`.
+- Frame structs: `vitonomi-core::protocol::wire::vault_bus`.

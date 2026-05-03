@@ -19,10 +19,11 @@ conformance vector identifiers.
 **Status: partial.** This document grows incrementally across
 implementation phases:
 
-- v0.1 (Phase 2): conventions + algorithm-id table + key blob + seed phrase
+- v0.1 (Phase 2 → mini-MVP Step 2): conventions + algorithm-id
+  table + key blob + seed phrase + invite token + admin chain
+  entry
 - v0.2 (Phase 5): snapshot envelope + RecordFrame + head pointer
 - v0.3 (Phase 8): alias-pubkey directory entry
-- v0.4 (Phase 9): admin chain entries
 
 Sections marked **TBD** are landing in the corresponding phase.
 
@@ -78,16 +79,100 @@ Anything outside this table is a parse error. New algorithms get a
 new entry and a `formatVersion` bump on every envelope that uses
 them.
 
-## Key blob — TBD (Phase 2)
+## Mini-MVP scope
 
-Format of the user's master keypair AEAD-encrypted under the
-encryption key derived from password via Argon2id. Sized for
-ML-DSA-65 + ML-KEM-768 secret bytes plus padding.
+This document grows incrementally. As of mini-MVP Step 2 the
+**Key blob**, **Seed phrase**, **Invite token**, and **Admin
+chain entry** sections below are normative; the rest are still
+TBD (record-types, snapshot envelope, head pointer, alias
+directory) and will land with their respective implementation
+phases. The Rust types backing the normative sections live in
+`vitonomi-core::crypto::*` and `vitonomi-core::protocol::wire::*`
+— those struct definitions are the source-of-truth byte layouts
+that this document narrates.
 
-## Seed phrase — TBD (Phase 2)
+## Key blob
 
-BIP-39 wordlist (English; other languages v1.1+). 24-word default.
-Entropy round-trip and seed-derived deterministic keypair tests.
+The user's master keypair AEAD-encrypted under the encryption
+key derived from password via Argon2id. Stored on the hub
+(`/v1/keyblob`), in IndexedDB on browsers, in
+`$XDG_CONFIG_HOME/vitonomi/state.json` for the CLI, and on the
+seed-phrase backup file. Multi-tier replication is the recovery
+mechanism — see [`architecture.md`](architecture.md).
+
+### Outer envelope (CBOR)
+
+```text
+KeyBlob {
+  magic:         bytes(4)   = b"VKB1",
+  format_version: uint8      = 1,
+  ciphertext:    bytes(var), // nonce(24) || aead_ct
+}
+```
+
+Encoded with deterministic CBOR (RFC 8949 strict). Magic is the
+ASCII bytes `0x56 0x4b 0x42 0x31`.
+
+### AEAD layer
+
+- Algorithm: **XChaCha20-Poly1305** (algId `0x03`).
+- Key: 32-byte AEAD key, output of `Argon2id(password, enc_salt,
+  argon2_params)` (see "Argon2id" below).
+- Nonce: 24 random bytes per re-encryption, prefixed to the AEAD
+  output (so `ciphertext = nonce(24) || ct(var) || tag(16)`).
+- Associated data (AAD): the 5 bytes
+  `magic(4) || format_version(1)`. Tampering with either field
+  invalidates the AEAD tag.
+- Plaintext: deterministic-CBOR-encoded `MasterSecretKeys` struct
+  (see below).
+
+### `MasterSecretKeys` plaintext
+
+```text
+MasterSecretKeys {
+  identity:      bytes(32),  // ML-DSA-65 FIPS 204 seed `xi`
+  cluster_admin: bytes(32),  // ML-DSA-65 FIPS 204 seed `xi`
+  kem:           bytes(64),  // ML-KEM-768 FIPS 203 seed (d || z)
+}
+```
+
+The seed-only encoding is a deliberate choice: storing just the
+FIPS internal seeds (rather than the expanded signing /
+decapsulation keys) gives a compact, format-stable payload that
+deterministically regenerates the full keypair on every use.
+See [`autonomi-compat.md`](autonomi-compat.md) for the rationale.
+
+### Argon2id parameter encoding
+
+Argon2id parameters travel separately from the key blob (in
+`/v1/auth/login/start` responses and in the cluster registration
+payload):
+
+```text
+Argon2Params {
+  mem_kib:     uint32,  // KiB; production ≥ 256 * 1024
+  time_cost:   uint32,  // production ≥ 3
+  parallelism: uint32,  // production ≥ 1
+  out_len:     uint32,  // always 32 in this version
+}
+```
+
+Production minimum: `mem_kib >= 256 * 1024 && time_cost >= 3 &&
+parallelism >= 1`. The `core` crate's `test-crypto` feature swaps
+in a fast `m=8 MiB / t=1` profile for tests; production builds
+must NOT have the feature enabled.
+
+## Seed phrase
+
+BIP-39 wordlist (English; other languages v1.1+). **24-word
+default.** Entropy is a 32-byte random value; checksum +
+encoding produced by the upstream `bip39` crate.
+
+The 64-byte BIP-39 PBKDF2 seed (`mnemonic.to_seed("")`) is
+**reserved** as the input to a future deterministic
+seed → master-key derivation; until `ml-dsa` exposes the
+FIPS 204 internal-seed API on a non-rc release, master keys are
+random and live solely in the AEAD-encrypted key blob.
 
 ## Chunk format
 
@@ -126,10 +211,126 @@ signature. AEAD-encrypted with the user's encryption key for
 storage on the hub, in IndexedDB, and in the seed-phrase backup
 file.
 
-## Admin chain entry — TBD (Phase 9)
+## Invite token
 
-Per-cluster signed log of admin actions (invite, revoke, set quota,
-add/revoke vault, rotate admin key).
+Admin-signed authorisation for a single vault to join a cluster.
+The CLI builds it locally; the hub stores it for TTL tracking
+and replay defense.
+
+### Outer envelope (CBOR)
+
+```text
+InviteToken {
+  body:              InviteTokenBody,
+  sig_cluster_admin: bytes(~3309),  // ML-DSA-65 over CBOR(body)
+}
+```
+
+### Body
+
+```text
+InviteTokenBody {
+  format_version:        uint8 = 1,
+  cluster_id:            bytes(32),
+  vault_role:            string,  // "storage" (closed enum)
+  hub_url:               string,
+  hub_cert_fingerprint:  string,  // "sha256:<base64url-no-padding>"
+                                  //   SPKI hash of hub TLS leaf cert
+  invite_nonce:          bytes(32),  // single-use; cluster-scoped uniqueness
+  expires_at_ms:         uint64,     // UNIX millis
+}
+```
+
+Strict parse — unknown `vault_role` values, malformed
+`hub_cert_fingerprint` patterns, and missing required fields are
+all parse errors. The `format_version` MUST equal the reader's
+expected version.
+
+### Acceptance signature
+
+When the vault accepts an invite it sends, alongside the invite,
+its own signature over `invite_nonce || vault_pubkey_bytes`
+(simple byte concatenation, no CBOR). This proves possession of
+the vault's secret half before the hub binds the pubkey to the
+cluster.
+
+## Admin chain entry
+
+Append-only signed log of cluster admin actions, replicated to
+the hub *and* to every vault in the cluster. The chain is the
+mechanism by which cluster identity (membership, revocations,
+admin pubkey) survives hub failover.
+
+### Wire format (CBOR)
+
+```text
+AdminChainEntry {
+  format_version: uint8 = 1,
+  cluster_id:     bytes(32),
+  prev_hash:      bytes(32),  // sha256 of previous CBOR-encoded entry; zero32 for genesis
+  seq:            uint64,     // 0 for genesis, monotonic +1
+  action:         string,     // "cluster-init" | "vault-enroll" | "vault-revoke" | "user-invite" | "user-revoke"
+  payload:        bytes(var), // CBOR, action-specific
+  sig:            bytes(~3309), // ML-DSA-65 over CBOR(EntryBody)
+}
+```
+
+`EntryBody` (input to `sig`) is everything except `sig` itself,
+serialised in the same order:
+
+```text
+EntryBody {
+  format_version: uint8,
+  cluster_id:     bytes(32),
+  prev_hash:      bytes(32),
+  seq:            uint64,
+  action:         string,
+  payload:        bytes(var),
+}
+```
+
+### Action enum
+
+| Value           | Emitted in mini-MVP | Payload schema                                    |
+| --------------- | ------------------- | ------------------------------------------------- |
+| `cluster-init`  | yes (genesis)       | Free-form bytes; future versions may carry policy |
+| `vault-enroll`  | yes                 | Vault metadata (id, name, pubkey-binding details) |
+| `vault-revoke`  | reserved            | TBD                                               |
+| `user-invite`   | reserved            | TBD                                               |
+| `user-revoke`   | reserved            | TBD                                               |
+
+Closed enum — readers reject unknown values with a typed error.
+
+### Genesis invariants
+
+- `seq == 0`
+- `prev_hash == zero32` (32 bytes of `0x00`)
+- `action == "cluster-init"`
+
+A chain whose seq-0 entry violates any of these MUST be rejected.
+
+### Hash linking
+
+For every entry `n+1`, `prev_hash` is computed as
+`sha256(CBOR-encode(entry_n))` — that is, the SHA-256 of the
+fully-CBOR-encoded entry including its signature, NOT just the
+signing body. This binds each entry not only to its predecessor's
+contents but also to the predecessor's signature (so a bit-flip
+in any prior signature breaks the chain at that point and every
+subsequent entry).
+
+### Verification
+
+`verify_chain(admin_pk, cluster_id, &entries)` runs:
+1. Reject empty chains.
+2. For each entry in order:
+   - `entry.cluster_id == cluster_id`.
+   - `entry.seq == i` (where `i` is the index, 0-based).
+   - `entry.prev_hash == expected_prev` (zero32 for `i = 0`,
+     `sha256(CBOR(entries[i-1]))` otherwise).
+   - For `i = 0`: `entry.action == "cluster-init"`.
+   - `verify_entry(admin_pk, entry)` succeeds.
+3. Set `expected_prev = sha256(CBOR(entry))` and continue.
 
 ## Alias-pubkey directory entry — TBD (Phase 8)
 
@@ -171,14 +372,15 @@ Every byte-format-defining section in this document references
 files in `docs/vectors/`. Implementations MUST round-trip every
 vector. CI runs the round-trip on every commit.
 
-| Section                | Vector path             | Status                |
-| ---------------------- | ----------------------- | --------------------- |
-| Key blob               | `vectors/key-blob/`     | TBD (Phase 2)         |
-| Seed phrase            | `vectors/seed-phrase/`  | TBD (Phase 2)         |
-| Chunk format           | `vectors/chunk/`        | Delegated to upstream |
-| DataMap                | `vectors/data-map/`     | Delegated to upstream |
-| RecordFrame            | `vectors/record-frame/` | TBD (Phase 5)         |
-| Snapshot envelope      | `vectors/snapshot/`     | TBD (Phase 5)         |
-| Head pointer           | `vectors/head-pointer/` | TBD (Phase 5)         |
-| Admin chain entry      | `vectors/admin-chain/`  | TBD (Phase 9)         |
-| Alias-pubkey directory | `vectors/alias-pubkey/` | TBD (Phase 8)         |
+| Section                | Vector path             | Status                                |
+| ---------------------- | ----------------------- | ------------------------------------- |
+| Key blob               | `vectors/key-blob/`     | TBD (will land with hub binary, Step 3) |
+| Seed phrase            | `vectors/seed-phrase/`  | TBD (will land with hub binary, Step 3) |
+| Invite token           | `vectors/invite/`       | TBD (will land with hub binary, Step 3) |
+| Admin chain entry      | `vectors/admin-chain/`  | TBD (will land with hub binary, Step 3) |
+| Chunk format           | `vectors/chunk/`        | Delegated to upstream                 |
+| DataMap                | `vectors/data-map/`     | Delegated to upstream                 |
+| RecordFrame            | `vectors/record-frame/` | TBD (Phase 5)                         |
+| Snapshot envelope      | `vectors/snapshot/`     | TBD (Phase 5)                         |
+| Head pointer           | `vectors/head-pointer/` | TBD (Phase 5)                         |
+| Alias-pubkey directory | `vectors/alias-pubkey/` | TBD (Phase 8)                         |

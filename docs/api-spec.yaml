@@ -1,21 +1,1078 @@
 openapi: 3.1.0
 info:
   title: vitonomi hub API
-  version: 0.0.1
+  version: 0.1.0
   description: |
-    OpenAPI 3.1 contract between vitonomi clients (PWA, CLI, mobile,
-    browser ext) and the vitonomi-hub. Stub placeholder; full
-    surface lands in Phase 4 of the implementation plan. See
-    docs/README.md for the spec-suite reading order.
+    OpenAPI 3.1 contract between vitonomi clients (CLI, PWA, mobile,
+    browser ext) and `vitonomi-hub`.
 
-    All endpoints will live under /v1/ once defined.
+    This file is the **single source of truth** for the client → hub
+    surface. Both the hub server (Rust + axum) and every client
+    consume it: the hub validates incoming requests with `serde` +
+    `validator` derives that mirror these schemas; clients consume
+    generated request types. Spectral lints this file in CI on every
+    PR (`npm run spec:lint`).
 
-paths: {}
+    The vault ↔ hub WebSocket protocol is in `protocol.md`. The
+    cluster identity model, login flow, invite-acceptance flow, and
+    admin-chain semantics are described in `architecture.md` and
+    `data-format.md`.
+
+    This is the **mini-MVP slice** (Step 2 of the auth + networking
+    plan in `~/.claude/plans/`). Endpoints reserved for later phases
+    (record reads/writes, head pointers, alias directory, mx push,
+    subscription billing) live in their own future revisions of this
+    file.
+  license:
+    name: AGPL-3.0-only
+    identifier: AGPL-3.0-only
+  contact:
+    name: vitonomi
+    url: https://vitonomi.com
+
+servers:
+  - url: https://localhost:4443
+    description: Local self-hosted hub (development)
+  - url: https://hub.vitonomi.com
+    description: Hosted hub (production)
+
+tags:
+  - name: clusters
+    description: Cluster registration and hub-portability restore
+  - name: auth
+    description: Scheme A login (signature challenge over identity sk)
+  - name: keyblob
+    description: AEAD-encrypted master-key envelope
+  - name: vaults
+    description: Vault directory and admin-signed invite acceptance
+  - name: admin-chain
+    description: Append-only signed log of cluster admin actions
+  - name: meta
+    description: Health and liveness
+
+paths:
+  # ─── Health ────────────────────────────────────────────────────────
+  /v1/health:
+    get:
+      tags: [meta]
+      operationId: getHealth
+      summary: Liveness probe
+      description: |
+        Unauthenticated. Returns `{ status: "ok", version }` only —
+        MUST NOT leak cluster count, DB state, or any per-cluster
+        information.
+      security: []
+      responses:
+        '200':
+          description: Hub is live
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  # ─── Clusters (register + restore) ─────────────────────────────────
+  /v1/clusters:
+    post:
+      tags: [clusters]
+      operationId: registerCluster
+      summary: Register a new cluster (cluster-admin user)
+      description: |
+        First-touch endpoint for a new cluster. The client generates
+        a master-key bundle (`identity` + `cluster_admin` + `kem`
+        ML-DSA-65/ML-KEM-768 keypairs), produces a signed genesis
+        admin-chain entry (`action: cluster-init, seq: 0,
+        prev_hash: zero32`), AEAD-encrypts the secret keys into a
+        key blob, and posts everything here.
+
+        Hub computes
+        `cluster_id = sha256(cluster_admin_pubkey || format_version)`,
+        verifies the genesis entry's signature against the supplied
+        admin pubkey, inserts cluster + admin user + entry, returns
+        a session.
+
+        In `--single-user` mode the hub rejects this once any cluster
+        record exists.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClusterRegisterRequest'
+      responses:
+        '201':
+          description: Cluster created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterRegisterResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          description: |
+            Cluster already exists with this `cluster_id`, the username
+            is taken, or `--single-user` mode is locked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /v1/clusters/restore:
+    post:
+      tags: [clusters]
+      operationId: restoreCluster
+      summary: Restore an existing cluster onto a fresh hub
+      description: |
+        Used when migrating away from a dead or untrusted hub. The
+        client supplies the same payload as `/v1/clusters` (master
+        pubkeys, salts, key blob) plus a full chain export. Hub
+        verifies *every* entry's admin signature + hash-link
+        continuity before adopting the cluster. If a cluster with the
+        same `cluster_id` already exists on this hub, restore is
+        rejected (operator must drop the conflicting record
+        explicitly).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClusterRestoreRequest'
+      responses:
+        '201':
+          description: Cluster restored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterRegisterResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          description: Cluster id collision; restore refused.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # ─── Auth (Scheme A login) ────────────────────────────────────────
+  /v1/auth/login/start:
+    post:
+      tags: [auth]
+      operationId: loginStart
+      summary: Begin a Scheme A login flow
+      description: |
+        Returns the salts + Argon2id parameters + encrypted key blob
+        the client needs to decrypt locally, plus a server-issued
+        challenge nonce + `challenge_id`. The server never sees the
+        password, the encryption key, or any verifier derived from
+        them.
+
+        Rate-limited per `username`+`IP`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginStartRequest'
+      responses:
+        '200':
+          description: Login challenge issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginStartResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/auth/login/finish:
+    post:
+      tags: [auth]
+      operationId: loginFinish
+      summary: Complete login by signing the challenge
+      description: |
+        Client decrypts the key blob with the password-derived
+        encryption key, recovers the identity ML-DSA-65 secret key,
+        signs the challenge, and posts `{ challenge_id, signature }`.
+        Hub verifies against the stored identity pubkey and issues a
+        session token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginFinishRequest'
+      responses:
+        '200':
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginFinishResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Revoke the current session
+      description: Revokes the bearer-token session attached to this request.
+      responses:
+        '204':
+          description: Session revoked
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/auth/sessions:
+    get:
+      tags: [auth]
+      operationId: listSessions
+      summary: List active sessions for the current user
+      description: |
+        Returns metadata for every active session belonging to this
+        user (across devices). Useful for "log out everywhere" UIs.
+      responses:
+        '200':
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SessionInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/auth/sessions/{session_id}:
+    delete:
+      tags: [auth]
+      operationId: revokeSession
+      summary: Revoke another session by id (logout-elsewhere)
+      description: |
+        Revokes a specific session by its `session_id`. The current
+        session may revoke any other session belonging to the same
+        user; cross-user revokes are forbidden.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '204':
+          description: Session revoked
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Key blob ─────────────────────────────────────────────────────
+  /v1/keyblob:
+    get:
+      tags: [keyblob]
+      operationId: getKeyBlob
+      summary: Fetch the user's encrypted key blob
+      description: |
+        Opaque to the hub. Always returned to the authenticated user;
+        clients decrypt locally with the password-derived key.
+      responses:
+        '200':
+          description: Encrypted key blob
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeyBlobResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags: [keyblob]
+      operationId: putKeyBlob
+      summary: Replace the user's encrypted key blob
+      description: |
+        Versioned write. Server rejects `version` lower than what's
+        stored (replay/rollback protection).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KeyBlobRequest'
+      responses:
+        '204':
+          description: Key blob replaced
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Version mismatch (rollback rejected)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # ─── Vaults ───────────────────────────────────────────────────────
+  /v1/vaults:
+    get:
+      tags: [vaults]
+      operationId: listVaults
+      summary: List vaults in the current cluster
+      description: |
+        Returns the vault directory for the active user's cluster.
+        Clients SHOULD verify the admin chain head signature against
+        the cached cluster admin pubkey before trusting this list.
+      responses:
+        '200':
+          description: Vault directory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [vaults]
+                properties:
+                  vaults:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VaultRecord'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/vaults/invites:
+    post:
+      tags: [vaults]
+      operationId: createVaultInvite
+      summary: Register an admin-signed invite token (admin-only)
+      description: |
+        The cluster admin signs the invite payload locally (CBOR over
+        `InviteTokenBody`) using the cluster admin secret key
+        recovered from the AEAD-encrypted key blob. The hub does not
+        hold the admin sk; it only stores the issued invite for TTL
+        tracking and replay defense.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInviteRequest'
+      responses:
+        '201':
+          description: Invite registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateInviteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: |
+            Invite signature did not verify against the stored
+            cluster admin pubkey, or `cluster_id` mismatch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /v1/vaults/accept:
+    post:
+      tags: [vaults]
+      operationId: acceptVaultInvite
+      summary: Vault-side — accept an invite and register
+      description: |
+        Called by the vault daemon during enrollment. Vault generates
+        its own ML-DSA-65 keypair, posts the invite token (admin-
+        signed) plus its public key plus a signature over
+        `invite_nonce || vault_pubkey` (proving possession of the
+        vault sk).
+
+        Hub re-verifies the admin signature, the vault signature,
+        TTL, and the invite-nonce uniqueness; on success it appends
+        a `vault-enroll` admin-chain entry, broadcasts that entry to
+        all online vaults via the vault-bus, and returns
+        `{ cluster_id, vault_id, cluster_admin_pubkey, chain_head }`.
+
+        This endpoint is **unauthenticated** by session token — the
+        admin signature on the invite is the gate.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptRequest'
+      responses:
+        '201':
+          description: Vault registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          description: |
+            Invite signature did not verify, the nonce was already
+            used, the invite expired, or the vault signature did not
+            verify against the supplied public key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # ─── Admin chain ──────────────────────────────────────────────────
+  /v1/admin-chain/{cluster_id}/head:
+    get:
+      tags: [admin-chain]
+      operationId: getAdminChainHead
+      summary: Latest admin-chain entry for the cluster
+      description: |
+        Returns the highest-`seq` entry in the cluster's admin
+        chain. Vaults call this on every reconnect to detect missed
+        entries.
+      parameters:
+        - $ref: '#/components/parameters/ClusterIdPath'
+      responses:
+        '200':
+          description: Chain head
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChainHeadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/admin-chain/{cluster_id}:
+    get:
+      tags: [admin-chain]
+      operationId: getAdminChain
+      summary: Export admin chain (paginated by from_seq)
+      description: |
+        Returns entries starting at `from_seq` (inclusive). Used by
+        vaults during catch-up after reconnect, by clients during
+        `cluster restore`, and by `vault list` to verify membership.
+      parameters:
+        - $ref: '#/components/parameters/ClusterIdPath'
+        - in: query
+          name: from_seq
+          schema:
+            type: integer
+            format: uint64
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Chain entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChainExport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [admin-chain]
+      operationId: appendAdminChain
+      summary: Append admin chain entries (restore + catch-up)
+      description: |
+        Authenticated chain push. Hub re-verifies every entry's
+        signature against the stored cluster admin pubkey, plus
+        seq + prev_hash continuity from the current chain head,
+        before persisting.
+      parameters:
+        - $ref: '#/components/parameters/ClusterIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChainAppendRequest'
+      responses:
+        '204':
+          description: Entries appended
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
 components:
-  schemas: {}
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: opaque-session-token
+
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+    ClusterIdPath:
+      name: cluster_id
+      in: path
+      required: true
+      description: 32-byte cluster id, lowercase hex.
+      schema:
+        type: string
+        pattern: '^[a-f0-9]{64}$'
+
+  responses:
+    Unauthorized:
+      description: Missing, invalid, or expired session token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    Forbidden:
+      description: Session is valid but lacks the required role / scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    ValidationError:
+      description: Request payload failed schema validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    RateLimited:
+      description: |
+        Too many requests for this `username`+`IP` over the rolling
+        window. Backoff per `Retry-After`.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+  schemas:
+    # ─── Common ────────────────────────────────────────────────────
+    Health:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+          description: Hub crate version (semver).
+
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Machine-readable discriminator (e.g. `auth.invalid_credentials`, `crypto.signature_invalid`).
+        message:
+          type: string
+          description: Human-readable message; safe to log.
+        details:
+          type: object
+          additionalProperties: true
+
+    Username:
+      type: string
+      description: |
+        Lowercase ASCII alphanumeric + `-` + `_`, length 3–32.
+        DNS-safe so a future `<username>.vito.gg` subdomain works
+        without renormalisation.
+      minLength: 3
+      maxLength: 32
+      pattern: '^[a-z0-9_-]{3,32}$'
+
+    ClusterId:
+      type: string
+      description: 32-byte cluster id, lowercase hex.
+      pattern: '^[a-f0-9]{64}$'
+
+    UserId:
+      type: string
+      description: 16-byte user id, lowercase hex.
+      pattern: '^[a-f0-9]{32}$'
+
+    VaultId:
+      type: string
+      description: 16-byte vault id, lowercase hex.
+      pattern: '^[a-f0-9]{32}$'
+
+    Base64UrlBytes:
+      type: string
+      description: |
+        Bytes encoded as URL-safe base64 with no padding (RFC 4648
+        §5). Used for all binary fields on the JSON wire.
+
+    SessionToken:
+      type: string
+      description: |
+        Opaque 32-byte token, base64url-encoded. The hub stores
+        only `sha256(token)`; logs include only the first 8 chars
+        of the hash.
+
+    FormatVersion:
+      type: integer
+      format: uint8
+      enum: [1]
+
+    Argon2Params:
+      type: object
+      required: [mem_kib, time_cost, parallelism, out_len]
+      properties:
+        mem_kib:
+          type: integer
+          format: uint32
+          minimum: 1024
+          description: Argon2id memory cost in KiB. Production ≥ 256 MiB.
+        time_cost:
+          type: integer
+          format: uint32
+          minimum: 1
+          description: Argon2id iteration count. Production ≥ 3.
+        parallelism:
+          type: integer
+          format: uint32
+          minimum: 1
+        out_len:
+          type: integer
+          format: uint32
+          enum: [32]
+          description: Always 32 in this version (256-bit AEAD key).
+
+    # ─── PQ wire types ────────────────────────────────────────────
+    MlDsa65PublicKey:
+      allOf:
+        - $ref: '#/components/schemas/Base64UrlBytes'
+      description: ML-DSA-65 verifying key (~1952 bytes).
+
+    MlKem768PublicKey:
+      allOf:
+        - $ref: '#/components/schemas/Base64UrlBytes'
+      description: ML-KEM-768 encapsulation key (~1184 bytes).
+
+    MlDsa65Signature:
+      allOf:
+        - $ref: '#/components/schemas/Base64UrlBytes'
+      description: ML-DSA-65 detached signature (~3309 bytes).
+
+    MasterPublicKeys:
+      type: object
+      required: [identity, cluster_admin, kem]
+      properties:
+        identity:
+          $ref: '#/components/schemas/MlDsa65PublicKey'
+        cluster_admin:
+          $ref: '#/components/schemas/MlDsa65PublicKey'
+        kem:
+          $ref: '#/components/schemas/MlKem768PublicKey'
+
+    # ─── Admin chain ──────────────────────────────────────────────
+    AdminAction:
+      type: string
+      enum:
+        - cluster-init
+        - vault-enroll
+        - vault-revoke
+        - user-invite
+        - user-revoke
+      description: |
+        Closed enum. Only `cluster-init` and `vault-enroll` are
+        emitted in this slice; the rest are reserved variants.
+
+    AdminChainEntry:
+      type: object
+      required:
+        - format_version
+        - cluster_id
+        - prev_hash
+        - seq
+        - action
+        - payload
+        - sig
+      properties:
+        format_version:
+          $ref: '#/components/schemas/FormatVersion'
+        cluster_id:
+          $ref: '#/components/schemas/ClusterId'
+        prev_hash:
+          allOf:
+            - $ref: '#/components/schemas/Base64UrlBytes'
+          description: 32 bytes. Zero32 for genesis.
+        seq:
+          type: integer
+          format: uint64
+          minimum: 0
+        action:
+          $ref: '#/components/schemas/AdminAction'
+        payload:
+          allOf:
+            - $ref: '#/components/schemas/Base64UrlBytes'
+          description: CBOR, action-specific. Verified opaque by the hub.
+        sig:
+          $ref: '#/components/schemas/MlDsa65Signature'
+
+    ChainExport:
+      type: object
+      required: [cluster_id, entries]
+      properties:
+        cluster_id:
+          $ref: '#/components/schemas/ClusterId'
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminChainEntry'
+
+    ChainHeadResponse:
+      type: object
+      required: [head]
+      properties:
+        head:
+          $ref: '#/components/schemas/AdminChainEntry'
+
+    ChainAppendRequest:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminChainEntry'
+
+    # ─── Cluster register / restore ───────────────────────────────
+    ClusterRegisterRequest:
+      type: object
+      required:
+        - username
+        - master_pubkeys
+        - auth_salt
+        - enc_salt
+        - argon2_params
+        - encrypted_key_blob
+        - genesis_entry
+      properties:
+        username:
+          $ref: '#/components/schemas/Username'
+        master_pubkeys:
+          $ref: '#/components/schemas/MasterPublicKeys'
+        auth_salt:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        enc_salt:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        argon2_params:
+          $ref: '#/components/schemas/Argon2Params'
+        encrypted_key_blob:
+          allOf:
+            - $ref: '#/components/schemas/Base64UrlBytes'
+          description: |
+            Output of `crypto::keyblob::encrypt` — VKB1-magic
+            CBOR envelope wrapping the AEAD-sealed
+            `MasterSecretKeys`.
+        genesis_entry:
+          allOf:
+            - $ref: '#/components/schemas/AdminChainEntry'
+          description: |
+            `seq=0`, `action=cluster-init`, `prev_hash=zero32`,
+            signed by `master_pubkeys.cluster_admin`'s secret half.
+
+    ClusterRegisterResponse:
+      type: object
+      required:
+        - cluster_id
+        - user_id
+        - session_token
+        - session_expires_at_ms
+      properties:
+        cluster_id:
+          $ref: '#/components/schemas/ClusterId'
+        user_id:
+          $ref: '#/components/schemas/UserId'
+        session_token:
+          $ref: '#/components/schemas/SessionToken'
+        session_expires_at_ms:
+          type: integer
+          format: uint64
+
+    ClusterRestoreRequest:
+      type: object
+      required:
+        - username
+        - master_pubkeys
+        - auth_salt
+        - enc_salt
+        - argon2_params
+        - encrypted_key_blob
+        - chain_export
+      properties:
+        username:
+          $ref: '#/components/schemas/Username'
+        master_pubkeys:
+          $ref: '#/components/schemas/MasterPublicKeys'
+        auth_salt:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        enc_salt:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        argon2_params:
+          $ref: '#/components/schemas/Argon2Params'
+        encrypted_key_blob:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        chain_export:
+          $ref: '#/components/schemas/ChainExport'
+
+    # ─── Auth ─────────────────────────────────────────────────────
+    Challenge:
+      type: object
+      required: [nonce, sent_at_ms]
+      properties:
+        nonce:
+          allOf:
+            - $ref: '#/components/schemas/Base64UrlBytes'
+          description: 32 random bytes.
+        sent_at_ms:
+          type: integer
+          format: uint64
+
+    LoginStartRequest:
+      type: object
+      required: [username]
+      properties:
+        username:
+          $ref: '#/components/schemas/Username'
+
+    LoginStartResponse:
+      type: object
+      required:
+        - auth_salt
+        - enc_salt
+        - argon2_params
+        - encrypted_key_blob
+        - challenge
+        - challenge_id
+        - expires_at_ms
+      properties:
+        auth_salt:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        enc_salt:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        argon2_params:
+          $ref: '#/components/schemas/Argon2Params'
+        encrypted_key_blob:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        challenge:
+          $ref: '#/components/schemas/Challenge'
+        challenge_id:
+          type: string
+          minLength: 16
+          maxLength: 64
+        expires_at_ms:
+          type: integer
+          format: uint64
+
+    LoginFinishRequest:
+      type: object
+      required: [challenge_id, signature]
+      properties:
+        challenge_id:
+          type: string
+          minLength: 16
+          maxLength: 64
+        signature:
+          $ref: '#/components/schemas/MlDsa65Signature'
+
+    LoginFinishResponse:
+      type: object
+      required: [session_token, session_expires_at_ms]
+      properties:
+        session_token:
+          $ref: '#/components/schemas/SessionToken'
+        session_expires_at_ms:
+          type: integer
+          format: uint64
+
+    SessionInfo:
+      type: object
+      required: [session_id, issued_at_ms, expires_at_ms]
+      properties:
+        session_id:
+          type: string
+        issued_at_ms:
+          type: integer
+          format: uint64
+        expires_at_ms:
+          type: integer
+          format: uint64
+        last_seen_ms:
+          type: integer
+          format: uint64
+        remote_ip:
+          type: string
+          description: Hashed remote address (sha256, first 16 hex chars). Never the raw IP.
+
+    # ─── Key blob ─────────────────────────────────────────────────
+    KeyBlobResponse:
+      type: object
+      required: [encrypted_key_blob, version]
+      properties:
+        encrypted_key_blob:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        version:
+          type: integer
+          format: uint64
+          minimum: 0
+
+    KeyBlobRequest:
+      type: object
+      required: [encrypted_key_blob, version]
+      properties:
+        encrypted_key_blob:
+          $ref: '#/components/schemas/Base64UrlBytes'
+        version:
+          type: integer
+          format: uint64
+          minimum: 0
+          description: |
+            Monotonically increasing. Hub rejects PUT with `version`
+            ≤ stored version (rollback protection).
+
+    # ─── Vaults ───────────────────────────────────────────────────
+    VaultRole:
+      type: string
+      enum: [storage]
+      description: |
+        Closed enum — currently only `storage`. Reserved for future
+        roles (e.g. `peer-only`, `audit`).
+
+    VaultStatus:
+      type: string
+      enum: [online, offline, revoked]
+
+    VaultRecord:
+      type: object
+      required: [vault_id, name, status]
+      properties:
+        vault_id:
+          $ref: '#/components/schemas/VaultId'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        last_seen_ms:
+          type: integer
+          format: uint64
+        status:
+          $ref: '#/components/schemas/VaultStatus'
+
+    InviteTokenBody:
+      type: object
+      required:
+        - format_version
+        - cluster_id
+        - vault_role
+        - hub_url
+        - hub_cert_fingerprint
+        - invite_nonce
+        - expires_at_ms
+      properties:
+        format_version:
+          $ref: '#/components/schemas/FormatVersion'
+        cluster_id:
+          $ref: '#/components/schemas/ClusterId'
+        vault_role:
+          $ref: '#/components/schemas/VaultRole'
+        hub_url:
+          type: string
+          format: uri
+          example: https://hub.vitonomi.com:4443
+        hub_cert_fingerprint:
+          type: string
+          description: |
+            `sha256:<base64url-no-padding>` — SPKI hash of the hub's
+            TLS leaf certificate. Vault MUST verify the live cert
+            matches this on every connect.
+          pattern: '^sha256:[A-Za-z0-9_-]{43}$'
+        invite_nonce:
+          allOf:
+            - $ref: '#/components/schemas/Base64UrlBytes'
+          description: 32 random bytes, single-use.
+        expires_at_ms:
+          type: integer
+          format: uint64
+
+    InviteToken:
+      type: object
+      required: [body, sig_cluster_admin]
+      properties:
+        body:
+          $ref: '#/components/schemas/InviteTokenBody'
+        sig_cluster_admin:
+          allOf:
+            - $ref: '#/components/schemas/MlDsa65Signature'
+          description: |
+            Signature over CBOR(body) by the cluster admin sk.
+
+    CreateInviteRequest:
+      type: object
+      required: [invite]
+      properties:
+        invite:
+          $ref: '#/components/schemas/InviteToken'
+
+    CreateInviteResponse:
+      type: object
+      required: [invite]
+      properties:
+        invite:
+          $ref: '#/components/schemas/InviteToken'
+
+    AcceptRequest:
+      type: object
+      required: [invite, vault_pubkey, vault_name, sig_vault]
+      properties:
+        invite:
+          $ref: '#/components/schemas/InviteToken'
+        vault_pubkey:
+          $ref: '#/components/schemas/MlDsa65PublicKey'
+        vault_name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        sig_vault:
+          allOf:
+            - $ref: '#/components/schemas/MlDsa65Signature'
+          description: |
+            Signature over `invite_nonce || vault_pubkey_bytes` by
+            the vault sk. Proves possession of the vault keypair's
+            secret half.
+
+    AcceptResponse:
+      type: object
+      required: [cluster_id, vault_id, cluster_admin_pubkey, chain_head]
+      properties:
+        cluster_id:
+          $ref: '#/components/schemas/ClusterId'
+        vault_id:
+          $ref: '#/components/schemas/VaultId'
+        cluster_admin_pubkey:
+          $ref: '#/components/schemas/MlDsa65PublicKey'
+        chain_head:
+          $ref: '#/components/schemas/AdminChainEntry'
+
+security:
+  - bearerAuth: []
