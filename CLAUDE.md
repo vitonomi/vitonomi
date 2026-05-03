@@ -95,7 +95,7 @@ npm run dev -w @vitonomi/mx    # mx
 - Explicit error handling — no silent `catch {}` blocks
 - Named exports over default exports
 - Import order: node builtins → third-party → local (alphabetical)
-- Brand name "vitonomi" is always lowercase, even at sentence start
+- Brand name is "vitonomi" (lowercase) in running text; "Vitonomi" is fine at sentence start
 
 ## Testing
 
