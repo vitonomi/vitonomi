@@ -10,11 +10,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod routes;
 pub mod server;
 pub mod state;
+pub mod tls;
+pub mod ws;
 
 pub use config::HubConfig;
 pub use server::{run, run_with_listener};

@@ -23,12 +23,27 @@ path = "src/lib.rs"
 [dependencies]
 vitonomi-core = { path = "../core" }
 
+# Persistence: sqlx-backed `SqliteHub` lands as a follow-up commit.
+# The hub binary currently runs against the in-memory fixture from
+# `vitonomi-core::protocol::testing`; restarts are non-persistent.
+# Wiring sqlx is a drop-in `Arc<dyn HubControlPlane>` swap.
+
 # Async runtime + web
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
 axum = { version = "0.8", features = ["macros", "ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "request-id"] }
 hyper = { version = "1", features = ["server"] }
+futures = "0.3"
+
+# TLS — dev cert generation + listener wrapping
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+sha2 = "0.10"
+base64 = "0.22"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 
 # Errors / serde / logging
 anyhow = "1"
@@ -49,3 +64,5 @@ tokio = { version = "1", features = ["full", "test-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde_json = "1"
 sha2 = "0.10"
+tokio-tungstenite = "0.29"
+futures = "0.3"

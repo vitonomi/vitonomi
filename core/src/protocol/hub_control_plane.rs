@@ -152,4 +152,25 @@ pub trait HubControlPlane: Send + Sync {
         cluster_id: &ClusterId,
         entries: Vec<AdminChainEntry>,
     ) -> Result<(), CoreError>;
+
+    /// Look up a vault's public key by `vault_id`. Used by the
+    /// vault-bus WebSocket handshake to verify the vault's signed
+    /// challenge response.
+    async fn get_vault_pubkey(
+        &self,
+        vault_id: &VaultId,
+    ) -> Result<crate::crypto::pq::MlDsa65PublicKey, CoreError>;
+
+    /// Update a vault's `last_seen` timestamp on every signed
+    /// heartbeat received via the vault-bus.
+    async fn touch_vault_last_seen(&self, vault_id: &VaultId, ts_ms: u64) -> Result<(), CoreError>;
+
+    /// Look up the latest admin-chain head for the cluster owning
+    /// `vault_id`. Used by the WebSocket vault-bus handshake to
+    /// populate `SessionEstablished.chain_head` without requiring
+    /// the vault to first authenticate via a session token.
+    async fn get_chain_head_for_vault(
+        &self,
+        vault_id: &VaultId,
+    ) -> Result<AdminChainEntry, CoreError>;
 }

@@ -29,8 +29,10 @@ pub async fn post_login_finish(
     Ok(Json(resp))
 }
 
-pub async fn post_logout() -> StatusCode {
-    // Bearer-token revocation lands with the auth middleware in a
-    // follow-up commit. Until then, logout is a no-op 204.
-    StatusCode::NO_CONTENT
+pub async fn post_logout(
+    State(state): State<AppState>,
+    crate::auth::BearerSession(token): crate::auth::BearerSession,
+) -> Result<StatusCode, ApiError> {
+    state.control_plane.logout(&token).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

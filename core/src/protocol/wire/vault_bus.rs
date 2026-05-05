@@ -49,6 +49,16 @@ pub struct DisconnectFrame {
     pub reason: String,
 }
 
+/// Periodic peer-state advertise. Sent on every reconnect by both
+/// hub and vault; vault is authoritative on disagreement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainAdvertiseFrame {
+    pub cluster_id: crate::types::ClusterId,
+    pub highest_seq: u64,
+    #[serde(with = "serde_bytes")]
+    pub head_hash: Vec<u8>,
+}
+
 /// Top-level frame enum with a `kind` discriminator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -58,6 +68,7 @@ pub enum BusFrame {
     SessionEstablished(SessionEstablishedFrame),
     Heartbeat(HeartbeatFrame),
     ChainAppend(ChainAppendFrame),
+    ChainAdvertise(ChainAdvertiseFrame),
     Error(ErrorFrame),
     Disconnect(DisconnectFrame),
 }

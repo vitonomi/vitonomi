@@ -2,7 +2,7 @@
 # Workspace-wide lint levels live in the [workspace.lints] table of
 # Cargo.toml; this file holds clippy options that don't fit there.
 
-msrv = "1.86.0"
+msrv = "1.88.0"
 avoid-breaking-exported-api = false
 allow-print-in-tests = true
 allow-dbg-in-tests = false

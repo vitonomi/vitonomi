@@ -526,6 +526,51 @@ impl HubControlPlane for InMemoryHubControlPlane {
             .collect())
     }
 
+    async fn get_vault_pubkey(
+        &self,
+        vault_id: &VaultId,
+    ) -> Result<crate::crypto::pq::MlDsa65PublicKey, CoreError> {
+        let state = self.state.lock().expect("poisoned");
+        for cluster in state.clusters.values() {
+            for v in &cluster.vaults {
+                if v.vault_id == *vault_id {
+                    return Ok(v.vault_pubkey.clone());
+                }
+            }
+        }
+        Err(CoreError::Auth(AuthError::Forbidden))
+    }
+
+    async fn touch_vault_last_seen(&self, vault_id: &VaultId, ts_ms: u64) -> Result<(), CoreError> {
+        let mut state = self.state.lock().expect("poisoned");
+        for cluster in state.clusters.values_mut() {
+            for v in cluster.vaults.iter_mut() {
+                if v.vault_id == *vault_id {
+                    v.last_seen_ms = Some(ts_ms);
+                    return Ok(());
+                }
+            }
+        }
+        Err(CoreError::Auth(AuthError::Forbidden))
+    }
+
+    async fn get_chain_head_for_vault(
+        &self,
+        vault_id: &VaultId,
+    ) -> Result<AdminChainEntry, CoreError> {
+        let state = self.state.lock().expect("poisoned");
+        for cluster in state.clusters.values() {
+            if cluster.vaults.iter().any(|v| v.vault_id == *vault_id) {
+                return cluster
+                    .chain
+                    .last()
+                    .cloned()
+                    .ok_or_else(|| CoreError::Crypto(CryptoError::AdminChain("empty".into())));
+            }
+        }
+        Err(CoreError::Auth(AuthError::Forbidden))
+    }
+
     async fn append_admin_chain(
         &self,
         session_token: &SessionToken,

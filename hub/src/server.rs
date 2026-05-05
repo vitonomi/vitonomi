@@ -13,12 +13,15 @@ use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        // Meta
         .route("/v1/status", get(crate::routes::status::get_status))
+        // Cluster register / restore
         .route("/v1/clusters", post(crate::routes::clusters::post_register))
         .route(
             "/v1/clusters/restore",
             post(crate::routes::clusters::post_restore),
         )
+        // Auth (Scheme A)
         .route(
             "/v1/auth/login/start",
             post(crate::routes::auth::post_login_start),
@@ -28,25 +31,63 @@ pub fn router(state: AppState) -> Router {
             post(crate::routes::auth::post_login_finish),
         )
         .route("/v1/auth/logout", post(crate::routes::auth::post_logout))
+        // Key blob
+        .route(
+            "/v1/keyblob",
+            get(crate::routes::keyblob::get).put(crate::routes::keyblob::put),
+        )
+        // Vaults
+        .route("/v1/vaults", get(crate::routes::vaults::get_list))
+        .route(
+            "/v1/vaults/invites",
+            post(crate::routes::vaults::post_invite),
+        )
+        .route(
+            "/v1/vaults/accept",
+            post(crate::routes::vaults::post_accept),
+        )
+        // Admin chain
+        .route(
+            "/v1/admin-chain/{cluster_id}/head",
+            get(crate::routes::admin_chain::get_head),
+        )
+        .route(
+            "/v1/admin-chain/{cluster_id}",
+            get(crate::routes::admin_chain::get_chain)
+                .post(crate::routes::admin_chain::post_append),
+        )
+        // WebSocket vault-bus
+        .route("/v1/vault-bus", get(crate::ws::vault_bus::ws_upgrade))
         .with_state(state)
         .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(tower_http::request_id::SetRequestIdLayer::x_request_id(
+            tower_http::request_id::MakeRequestUuid,
+        ))
 }
 
-/// Bind a listener and serve until shutdown.
+/// Bind a TLS listener and serve until shutdown. Production entrypoint.
 ///
 /// # Errors
 ///
-/// Surfaces listener-bind, IO, and runtime errors.
+/// Surfaces TLS-material resolution, listener-bind, and runtime errors.
 pub async fn run(cfg: HubConfig) -> anyhow::Result<()> {
+    let tls = crate::tls::resolve(&cfg).context("resolve TLS material")?;
+    tracing::info!(spki = %tls.spki_fingerprint, "TLS material loaded");
+
     let addr = SocketAddr::new(
         IpAddr::from_str(&cfg.server.bind_addr).context("bad bind_addr")?,
         cfg.server.port,
     );
-    let listener = TcpListener::bind(addr)
+    let app = router(AppState::in_memory());
+    let rustls_config =
+        axum_server::tls_rustls::RustlsConfig::from_pem(tls.cert_pem.clone(), tls.key_pem.clone())
+            .await
+            .context("build axum-server rustls config")?;
+    tracing::info!(%addr, "vitonomi-hub listening (HTTPS)");
+    axum_server::bind_rustls(addr, rustls_config)
+        .serve(app.into_make_service())
         .await
-        .with_context(|| format!("bind {addr}"))?;
-    tracing::info!(%addr, "vitonomi-hub listening");
-    run_with_listener(listener, AppState::in_memory()).await
+        .context("serve loop")
 }
 
 /// Variant that takes a pre-bound listener and explicit state. Used
