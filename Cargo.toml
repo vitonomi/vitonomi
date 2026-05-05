@@ -6,14 +6,14 @@ resolver = "2"
 # fills `core` with real code; later steps add `vault`, `hub`,
 # `clients/cli`, etc. See ../PROJECT.md and ~/.claude/plans/ for the
 # work breakdown.
-members = ["core"]
+members = ["core", "hub"]
 exclude = ["clients/web", "clients/mobile", "clients/ext"]
 
 [workspace.package]
 version = "0.0.0"
 license = "AGPL-3.0-only"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.86"
 authors = ["vitonomi contributors"]
 repository = "https://github.com/vitonomi/vitonomi"
 homepage = "https://vitonomi.com"

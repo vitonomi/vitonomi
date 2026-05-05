@@ -1,6 +1,7 @@
 [toolchain]
-# edition 2024 was stabilized in Rust 1.85; many modern crates
-# (base64ct, blake3 1.8+) require it.
-channel = "1.85.0"
+# edition 2024 was stabilized in Rust 1.85; bumped to 1.86 because
+# many modern crates (icu_*, idna_adapter, reqwest's URL stack)
+# now require it.
+channel = "1.86.0"
 components = ["rustfmt", "clippy", "rust-src"]
 profile = "default"

@@ -18,10 +18,14 @@
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::crypto::cluster_keys::{
+    derive_cluster_pepper, derive_cluster_shared_key, ClusterPepper, ClusterSharedKey,
+};
 use crate::crypto::pq::{
     ml_dsa_65_keypair, ml_kem_768_keypair, MlDsa65Keypair, MlDsa65PublicKey, MlDsa65SecretKey,
     MlKem768Keypair, MlKem768PublicKey, MlKem768SecretKey,
 };
+use crate::crypto::seedphrase::SeedPhrase;
 
 /// All master keys belonging to a cluster creator.
 pub struct MasterKeys {
@@ -45,6 +49,35 @@ impl MasterKeys {
     }
 }
 
+/// Everything needed to bootstrap a brand-new cluster: random
+/// master keypairs PLUS the deterministic-from-seed cluster pepper +
+/// cluster shared key. Returned by [`GenesisMaterial::generate`].
+pub struct GenesisMaterial {
+    pub master_keys: MasterKeys,
+    pub seed_phrase: SeedPhrase,
+    pub cluster_pepper: ClusterPepper,
+    pub cluster_shared_key: ClusterSharedKey,
+}
+
+impl GenesisMaterial {
+    /// Generate a fresh seed phrase + master keys + derived cluster
+    /// pepper / shared key.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CryptoError::Random` if the platform RNG fails.
+    pub fn generate() -> Result<Self, crate::errors::CryptoError> {
+        let seed_phrase = SeedPhrase::generate()?;
+        let seed = seed_phrase.to_seed("");
+        Ok(Self {
+            master_keys: MasterKeys::generate()?,
+            cluster_pepper: derive_cluster_pepper(&seed),
+            cluster_shared_key: derive_cluster_shared_key(&seed),
+            seed_phrase,
+        })
+    }
+}
+
 /// The public-key half of a [`MasterKeys`] bundle. Safe to publish
 /// (this is what the hub stores in the user record).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,25 +97,52 @@ impl From<&MasterKeys> for MasterPublicKeys {
     }
 }
 
-/// The secret-key half of a [`MasterKeys`] bundle. Encrypted into
-/// the key blob; never travels in cleartext after first generation.
+/// The secret-key half of a [`MasterKeys`] bundle PLUS the
+/// cluster-scoped symmetric material. Encrypted into the key blob;
+/// never travels in cleartext after first generation.
 #[derive(Clone, Zeroize, ZeroizeOnDrop, Serialize, Deserialize)]
 pub struct MasterSecretKeys {
-    /// ML-DSA-65 identity secret-key bytes.
+    /// ML-DSA-65 identity secret-key bytes (32-byte FIPS 204 seed).
     pub identity: MlDsa65SecretKeyBytes,
     /// ML-DSA-65 cluster-admin secret-key bytes.
     pub cluster_admin: MlDsa65SecretKeyBytes,
-    /// ML-KEM-768 KEM secret-key bytes.
+    /// ML-KEM-768 KEM secret-key bytes (64-byte FIPS 203 seed).
     pub kem: MlKem768SecretKeyBytes,
+    /// Cluster pepper (HKDF from BIP-39 seed; defeats `lookup_id`
+    /// rainbow-table attacks).
+    pub cluster_pepper: ClusterPepper,
+    /// Cluster shared AEAD key (HKDF from BIP-39 seed; seals chain
+    /// payloads + vault directory entries).
+    pub cluster_shared_key: ClusterSharedKey,
 }
 
 impl MasterSecretKeys {
+    /// Build the secret bundle from a freshly generated [`GenesisMaterial`].
+    #[must_use]
+    pub fn from_genesis(g: &GenesisMaterial) -> Self {
+        Self {
+            identity: MlDsa65SecretKeyBytes(g.master_keys.identity.secret.0.clone()),
+            cluster_admin: MlDsa65SecretKeyBytes(g.master_keys.cluster_admin.secret.0.clone()),
+            kem: MlKem768SecretKeyBytes(g.master_keys.kem.secret.0.clone()),
+            cluster_pepper: g.cluster_pepper.clone(),
+            cluster_shared_key: g.cluster_shared_key.clone(),
+        }
+    }
+
+    /// Legacy builder kept for tests + transitional callers; constructs
+    /// the secret bundle from random master keys and freshly random
+    /// pepper + shared key (NOT seed-derived). Use
+    /// [`Self::from_genesis`] in production code.
     #[must_use]
     pub fn from_keypair(k: &MasterKeys) -> Self {
+        // For backwards compat with existing tests; production paths
+        // should always go through `GenesisMaterial`.
         Self {
             identity: MlDsa65SecretKeyBytes(k.identity.secret.0.clone()),
             cluster_admin: MlDsa65SecretKeyBytes(k.cluster_admin.secret.0.clone()),
             kem: MlKem768SecretKeyBytes(k.kem.secret.0.clone()),
+            cluster_pepper: ClusterPepper(vec![0u8; ClusterPepper::LEN]),
+            cluster_shared_key: ClusterSharedKey(vec![0u8; ClusterSharedKey::LEN]),
         }
     }
 }

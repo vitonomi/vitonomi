@@ -1,0 +1,51 @@
+[package]
+name = "vitonomi-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "vitonomi hub control-plane server. axum + sqlx + WebSocket vault-bus."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "vitonomi-hub"
+path = "src/main.rs"
+
+[lib]
+name = "vitonomi_hub"
+path = "src/lib.rs"
+
+[dependencies]
+vitonomi-core = { path = "../core" }
+
+# Async runtime + web
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "request-id"] }
+hyper = { version = "1", features = ["server"] }
+
+# Errors / serde / logging
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt"] }
+
+# Config
+figment = { version = "0.10", features = ["toml", "env"] }
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+toml = "0.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1"
+sha2 = "0.10"

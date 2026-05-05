@@ -20,20 +20,20 @@ use crate::protocol::wire::accept::{
 };
 use crate::protocol::wire::admin_chain::ChainExport;
 use crate::protocol::wire::login::{
-    LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse,
+    LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse, UserLookupId,
 };
 use crate::types::{ClusterId, SessionToken, VaultId};
 
+/// Cluster-register request — hub-blind. The hub stores users keyed
+/// by `lookup_id` (Argon2id + cluster_pepper); raw username is never
+/// transmitted. `encrypted_key_blob` is opaque to the hub; its
+/// plaintext header carries `auth_salt`, `enc_salt`, and Argon2id
+/// parameters needed by the client to decrypt locally.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClusterRegisterRequest {
-    pub username: crate::types::Username,
+    pub lookup_id: UserLookupId,
     pub master_pubkeys: MasterPublicKeys,
-    #[serde(with = "serde_bytes")]
-    pub auth_salt: Vec<u8>,
-    #[serde(with = "serde_bytes")]
-    pub enc_salt: Vec<u8>,
-    pub argon2_params: crate::crypto::argon2::Argon2Params,
-    /// CBOR-encoded encrypted key blob.
+    /// CBOR-encoded encrypted key blob (opaque to hub).
     #[serde(with = "serde_bytes")]
     pub encrypted_key_blob: Vec<u8>,
     pub genesis_entry: AdminChainEntry,
@@ -49,24 +49,27 @@ pub struct ClusterRegisterResponse {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClusterRestoreRequest {
-    pub username: crate::types::Username,
+    pub lookup_id: UserLookupId,
     pub master_pubkeys: MasterPublicKeys,
-    #[serde(with = "serde_bytes")]
-    pub auth_salt: Vec<u8>,
-    #[serde(with = "serde_bytes")]
-    pub enc_salt: Vec<u8>,
-    pub argon2_params: crate::crypto::argon2::Argon2Params,
     #[serde(with = "serde_bytes")]
     pub encrypted_key_blob: Vec<u8>,
     pub chain_export: ChainExport,
 }
 
+/// Hub-readable vault record. Plaintext fields are restricted to the
+/// hub-blindness allow-list: opaque ids, public key, connection-
+/// observable state. Vault names + roles are sealed under the
+/// cluster shared key in `sealed_meta`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VaultRecord {
     pub vault_id: VaultId,
-    pub name: String,
+    pub vault_pubkey: crate::crypto::pq::MlDsa65PublicKey,
     pub last_seen_ms: Option<u64>,
     pub status: VaultStatus,
+    /// AEAD ciphertext under cluster shared key. Holds vault_name,
+    /// vault_role, enrollment_ts, etc. Hub stores opaque bytes.
+    #[serde(with = "serde_bytes")]
+    pub sealed_meta: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

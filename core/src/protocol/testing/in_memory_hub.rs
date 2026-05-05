@@ -1,27 +1,25 @@
-//! In-memory `HubControlPlane` implementation for integration tests.
+//! In-memory `HubControlPlane` implementation for integration tests
+//! under the hub-blindness invariant.
 //!
-//! Maintains a `Mutex<HubState>` matching the real hub's data model
-//! at the trait granularity: clusters, users, vaults, sessions,
-//! invite nonces, key blobs, admin chains. Exercises the *same*
-//! crypto verifications the real hub does (genesis-entry
-//! verification on register, signature on accept, chain verify on
-//! restore).
+//! Stores only the allow-listed plaintext fields: `cluster_id`,
+//! public keys, opaque ids, connection-observable state, and signed
+//! envelope shells with sealed bodies. Verifies admin signatures
+//! (outer envelope) and vault signatures at the relevant gates.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::crypto::admin_chain::{
-    verify_chain, verify_entry, AdminAction, AdminChainEntry, GENESIS_PREV_HASH,
-};
+use sha2::Digest as _;
+
+use crate::crypto::admin_chain::{verify_outer, AdminChainEntry, GENESIS_PREV_HASH};
 use crate::crypto::challenge::{verify_challenge, Challenge};
-use crate::crypto::cluster::{cluster_id_of, verify_invite_payload};
-use crate::crypto::keys::MasterPublicKeys;
+use crate::crypto::cluster::cluster_id_of;
 use crate::crypto::pq::MlDsa65PublicKey;
 use crate::crypto::random::random_bytes;
 use crate::encoding::{b64url_encode, cbor_to_vec};
-use crate::errors::{AuthError, CoreError, CryptoError, ProtocolError};
+use crate::errors::{AuthError, CoreError, CryptoError};
 use crate::protocol::hub_control_plane::{
     ClusterRegisterRequest, ClusterRegisterResponse, ClusterRestoreRequest, HubControlPlane,
     VaultRecord, VaultStatus,
@@ -32,15 +30,18 @@ use crate::protocol::wire::accept::{
 use crate::protocol::wire::login::{
     LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse,
 };
-use crate::types::{ClusterId, FormatVersion, SessionToken, UserId, Username, VaultId};
+use crate::types::{ClusterId, FormatVersion, SessionToken, UserId, VaultId};
 
 #[derive(Default)]
 struct HubState {
     clusters: HashMap<ClusterId, ClusterRecord>,
-    users_by_username: HashMap<Username, UserRecord>,
+    users_by_lookup: HashMap<Vec<u8>, UserRecord>,
     sessions: HashMap<String, Session>,
     challenges: HashMap<String, PendingChallenge>,
     invite_used: HashMap<Vec<u8>, ()>,
+    /// Open invites — keyed by `invite_nonce`, value is the stored
+    /// outer summary. Hub uses these for replay defense + admission.
+    invite_outers: HashMap<Vec<u8>, crate::protocol::wire::accept::InviteOuterSummary>,
 }
 
 struct ClusterRecord {
@@ -52,10 +53,7 @@ struct ClusterRecord {
 struct UserRecord {
     user_id: UserId,
     cluster_id: ClusterId,
-    master_pubkeys: MasterPublicKeys,
-    auth_salt: Vec<u8>,
-    enc_salt: Vec<u8>,
-    argon2_params: crate::crypto::argon2::Argon2Params,
+    identity_pubkey: MlDsa65PublicKey,
     encrypted_key_blob: Vec<u8>,
 }
 
@@ -71,23 +69,13 @@ struct PendingChallenge {
     expires_at_ms: u64,
 }
 
-struct UserSnapshot {
-    user_id: UserId,
-    auth_salt: Vec<u8>,
-    enc_salt: Vec<u8>,
-    argon2_params: crate::crypto::argon2::Argon2Params,
-    encrypted_key_blob: Vec<u8>,
-}
-
-/// In-memory hub for integration tests. Cheap to construct; keep
-/// one per test for isolation.
+/// In-memory hub for integration tests.
 pub struct InMemoryHubControlPlane {
     state: Mutex<HubState>,
     clock_ms: fn() -> u64,
 }
 
 impl InMemoryHubControlPlane {
-    /// Build a hub using the system clock.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -96,8 +84,6 @@ impl InMemoryHubControlPlane {
         }
     }
 
-    /// Build a hub with a custom clock function (useful for testing
-    /// expiry windows deterministically).
     #[must_use]
     pub fn with_clock(clock_ms: fn() -> u64) -> Self {
         Self {
@@ -169,18 +155,18 @@ impl HubControlPlane for InMemoryHubControlPlane {
         if state.clusters.contains_key(&cluster_id) {
             return Err(CoreError::Auth(AuthError::Forbidden));
         }
-        if state.users_by_username.contains_key(&req.username) {
+        if state.users_by_lookup.contains_key(req.lookup_id.as_bytes()) {
             return Err(CoreError::Auth(AuthError::Forbidden));
         }
-        // Verify genesis entry signature against the admin pubkey.
-        verify_entry(&req.master_pubkeys.cluster_admin, &req.genesis_entry)?;
+
+        // Verify genesis entry's outer signature against admin pubkey.
+        verify_outer(&req.master_pubkeys.cluster_admin, &req.genesis_entry)?;
         if req.genesis_entry.cluster_id != cluster_id
             || req.genesis_entry.seq != 0
-            || req.genesis_entry.action != AdminAction::ClusterInit
             || req.genesis_entry.prev_hash != GENESIS_PREV_HASH
         {
             return Err(CoreError::Crypto(CryptoError::AdminChain(
-                "genesis entry mismatched cluster_id / seq / action / prev_hash".into(),
+                "genesis entry mismatched cluster_id / seq / prev_hash".into(),
             )));
         }
 
@@ -198,15 +184,12 @@ impl HubControlPlane for InMemoryHubControlPlane {
                 vaults: vec![],
             },
         );
-        state.users_by_username.insert(
-            req.username.clone(),
+        state.users_by_lookup.insert(
+            req.lookup_id.0.clone(),
             UserRecord {
                 user_id,
                 cluster_id,
-                master_pubkeys: req.master_pubkeys,
-                auth_salt: req.auth_salt,
-                enc_salt: req.enc_salt,
-                argon2_params: req.argon2_params,
+                identity_pubkey: req.master_pubkeys.identity.clone(),
                 encrypted_key_blob: req.encrypted_key_blob,
             },
         );
@@ -229,7 +212,8 @@ impl HubControlPlane for InMemoryHubControlPlane {
         if state.clusters.contains_key(&cluster_id) {
             return Err(CoreError::Auth(AuthError::Forbidden));
         }
-        verify_chain(
+        // Outer-only chain verify (hub doesn't have cluster_shared_key).
+        crate::crypto::admin_chain::verify_chain_outer_only(
             &req.master_pubkeys.cluster_admin,
             cluster_id,
             &req.chain_export.entries,
@@ -252,15 +236,12 @@ impl HubControlPlane for InMemoryHubControlPlane {
                 vaults: vec![],
             },
         );
-        state.users_by_username.insert(
-            req.username.clone(),
+        state.users_by_lookup.insert(
+            req.lookup_id.0.clone(),
             UserRecord {
                 user_id,
                 cluster_id,
-                master_pubkeys: req.master_pubkeys,
-                auth_salt: req.auth_salt,
-                enc_salt: req.enc_salt,
-                argon2_params: req.argon2_params,
+                identity_pubkey: req.master_pubkeys.identity.clone(),
                 encrypted_key_blob: req.encrypted_key_blob,
             },
         );
@@ -276,18 +257,13 @@ impl HubControlPlane for InMemoryHubControlPlane {
 
     async fn login_start(&self, req: LoginStartRequest) -> Result<LoginStartResponse, CoreError> {
         let mut state = self.state.lock().expect("poisoned");
-        // Snapshot what we need from the user record while only
-        // holding an immutable borrow.
         let snapshot = {
             let user = state
-                .users_by_username
-                .get(&req.username)
+                .users_by_lookup
+                .get(req.lookup_id.as_bytes())
                 .ok_or_else(|| CoreError::Auth(AuthError::InvalidCredentials))?;
             UserSnapshot {
                 user_id: user.user_id,
-                auth_salt: user.auth_salt.clone(),
-                enc_salt: user.enc_salt.clone(),
-                argon2_params: user.argon2_params,
                 encrypted_key_blob: user.encrypted_key_blob.clone(),
             }
         };
@@ -297,9 +273,6 @@ impl HubControlPlane for InMemoryHubControlPlane {
         let expires_at_ms = self.now() + 5 * 60 * 1000;
 
         let resp = LoginStartResponse {
-            auth_salt: snapshot.auth_salt,
-            enc_salt: snapshot.enc_salt,
-            argon2_params: snapshot.argon2_params,
             encrypted_key_blob: snapshot.encrypted_key_blob,
             challenge: challenge.clone(),
             challenge_id: challenge_id.clone(),
@@ -329,17 +302,12 @@ impl HubControlPlane for InMemoryHubControlPlane {
         if pending.expires_at_ms < self.now() {
             return Err(CoreError::Auth(AuthError::ChallengeExpired));
         }
-        // Find the user's identity pubkey via cluster_id reverse lookup.
         let user = state
-            .users_by_username
+            .users_by_lookup
             .values()
             .find(|u| u.user_id == pending.user_id)
             .ok_or_else(|| CoreError::Auth(AuthError::SessionUnknown))?;
-        verify_challenge(
-            &user.master_pubkeys.identity,
-            &pending.challenge,
-            &req.signature,
-        )?;
+        verify_challenge(&user.identity_pubkey, &pending.challenge, &req.signature)?;
         let cluster_id = user.cluster_id;
         let user_id = user.user_id;
         let (session_token, session_expires_at_ms) =
@@ -360,7 +328,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
         let state = self.state.lock().expect("poisoned");
         let s = self.lookup_session(&state, session_token)?;
         let user = state
-            .users_by_username
+            .users_by_lookup
             .values()
             .find(|u| u.user_id == s.user_id)
             .ok_or_else(|| CoreError::Auth(AuthError::SessionUnknown))?;
@@ -375,7 +343,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
         let mut state = self.state.lock().expect("poisoned");
         let user_id = self.lookup_session(&state, session_token)?.user_id;
         let user = state
-            .users_by_username
+            .users_by_lookup
             .values_mut()
             .find(|u| u.user_id == user_id)
             .ok_or_else(|| CoreError::Auth(AuthError::SessionUnknown))?;
@@ -401,46 +369,59 @@ impl HubControlPlane for InMemoryHubControlPlane {
         session_token: &SessionToken,
         req: CreateInviteRequest,
     ) -> Result<CreateInviteResponse, CoreError> {
-        let state = self.state.lock().expect("poisoned");
+        let mut state = self.state.lock().expect("poisoned");
         let cluster_id = self.lookup_session(&state, session_token)?.cluster_id;
-        let cluster = state
+        let admin_pubkey = state
             .clusters
             .get(&cluster_id)
-            .ok_or_else(|| CoreError::Auth(AuthError::SessionUnknown))?;
-        // Verify the invite is signed by *this* cluster's admin.
-        let body_bytes = cbor_to_vec(&req.invite.body)
-            .map_err(|e| CoreError::Protocol(ProtocolError::Cbor(e.to_string())))?;
-        verify_invite_payload(
-            &cluster.admin_pubkey,
+            .ok_or_else(|| CoreError::Auth(AuthError::SessionUnknown))?
+            .admin_pubkey
+            .clone();
+        // Verify outer signature against the cluster admin pubkey.
+        let body_bytes = invite_outer_signed_bytes(&req.invite)?;
+        crate::crypto::pq::ml_dsa_65_verify(
+            &admin_pubkey,
+            &req.invite.sig_admin_outer,
             &body_bytes,
-            &req.invite.sig_cluster_admin,
         )?;
-        if req.invite.body.cluster_id != cluster_id {
+        if req.invite.cluster_id != cluster_id {
             return Err(CoreError::Crypto(CryptoError::AdminChain(
                 "invite cluster_id mismatch".into(),
             )));
         }
-        // Note: we don't track "issued but unused" invites in the
-        // in-memory hub. The real hub does, to support TTL expiry +
-        // listing. `invite_used` is populated on accept (replay
-        // defense).
+        // Atomic dedup: reject if nonce already present.
+        if state.invite_outers.contains_key(&req.invite.invite_nonce) {
+            return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
+        }
+        state
+            .invite_outers
+            .insert(req.invite.invite_nonce.clone(), req.invite.clone());
         Ok(CreateInviteResponse { invite: req.invite })
     }
 
     async fn accept_vault_invite(&self, req: AcceptRequest) -> Result<AcceptResponse, CoreError> {
         let mut state = self.state.lock().expect("poisoned");
-        let cluster_id = req.invite.body.cluster_id;
-        let nonce = req.invite.body.invite_nonce.clone();
+        let cluster_id = req.invite_outer.cluster_id;
+        let nonce = req.invite_outer.invite_nonce.clone();
 
-        // 1. Expiry + replay check (don't need any cluster borrow).
-        if req.invite.body.expires_at_ms < self.now() {
+        // 1. Expiry check.
+        if req.invite_outer.expires_at_ms < self.now() {
             return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
         }
+        // 2. Replay check (cleared invite_used on accept).
         if state.invite_used.contains_key(&nonce) {
             return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
         }
+        // 3. Verify hub's stored outer matches what the vault submits.
+        let stored = state
+            .invite_outers
+            .get(&nonce)
+            .ok_or(CoreError::Auth(AuthError::InviteUsedOrExpired))?;
+        if stored != &req.invite_outer {
+            return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
+        }
 
-        // 2. Snapshot admin pubkey + chain head while holding only an
+        // 4. Snapshot admin pubkey + chain head while holding only an
         //    immutable cluster borrow.
         let (admin_pubkey, chain_head) = {
             let cluster = state
@@ -454,18 +435,31 @@ impl HubControlPlane for InMemoryHubControlPlane {
             (cluster.admin_pubkey.clone(), head)
         };
 
-        // 3. Re-verify admin signature on the invite.
-        let body_bytes = cbor_to_vec(&req.invite.body)
-            .map_err(|e| CoreError::Protocol(ProtocolError::Cbor(e.to_string())))?;
-        verify_invite_payload(&admin_pubkey, &body_bytes, &req.invite.sig_cluster_admin)?;
+        // 5. Re-verify admin signature on the outer summary.
+        let body_bytes = invite_outer_signed_bytes(&req.invite_outer)?;
+        crate::crypto::pq::ml_dsa_65_verify(
+            &admin_pubkey,
+            &req.invite_outer.sig_admin_outer,
+            &body_bytes,
+        )?;
 
-        // 4. Verify vault signature over (invite_nonce || vault_pubkey_bytes).
+        // 6. Verify inner_payload_hash matches the inner the vault submitted.
+        let inner_bytes = cbor_to_vec(&req.invite_inner)
+            .map_err(|e| CoreError::Crypto(CryptoError::AdminChain(format!("inner CBOR: {e}"))))?;
+        let mut inner_hash = [0u8; 32];
+        let digest = sha2::Sha256::digest(&inner_bytes);
+        inner_hash.copy_from_slice(&digest);
+        if inner_hash[..] != req.invite_outer.inner_payload_hash[..] {
+            return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
+        }
+
+        // 7. Verify vault's signature over (invite_nonce || vault_pubkey).
         let mut signed = Vec::new();
         signed.extend_from_slice(&nonce);
         signed.extend_from_slice(req.vault_pubkey.as_bytes());
         crate::crypto::pq::ml_dsa_65_verify(&req.vault_pubkey, &req.sig_vault, &signed)?;
 
-        // 5. Allocate vault id + insert. We re-borrow mutably here.
+        // 8. Allocate vault id + insert. Re-borrow mutably here.
         let vault_id = {
             let mut buf = [0u8; 16];
             buf.copy_from_slice(&random_bytes(16).expect("rng"));
@@ -478,9 +472,10 @@ impl HubControlPlane for InMemoryHubControlPlane {
                 .ok_or_else(|| CoreError::Auth(AuthError::Forbidden))?;
             cluster.vaults.push(VaultRecord {
                 vault_id,
-                name: req.vault_name,
+                vault_pubkey: req.vault_pubkey.clone(),
                 last_seen_ms: None,
                 status: VaultStatus::Online,
+                sealed_meta: vec![], // Real hub seals vault_name + role + ts here.
             });
         }
         state.invite_used.insert(nonce, ());
@@ -545,8 +540,37 @@ impl HubControlPlane for InMemoryHubControlPlane {
             .ok_or_else(|| CoreError::Auth(AuthError::Forbidden))?;
         let mut combined = cluster.chain.clone();
         combined.extend(entries);
-        verify_chain(&cluster.admin_pubkey, *cluster_id, &combined)?;
+        // Outer-only verify (hub-blind: no cluster_shared_key).
+        crate::crypto::admin_chain::verify_chain_outer_only(
+            &cluster.admin_pubkey,
+            *cluster_id,
+            &combined,
+        )?;
         cluster.chain = combined;
         Ok(())
     }
+}
+
+struct UserSnapshot {
+    user_id: UserId,
+    encrypted_key_blob: Vec<u8>,
+}
+
+/// Compute the bytes that the cluster admin signs as
+/// `sig_admin_outer` over an `InviteOuterSummary`. Must mirror what
+/// the admin's CLI computes when generating the invite.
+fn invite_outer_signed_bytes(
+    outer: &crate::protocol::wire::accept::InviteOuterSummary,
+) -> Result<Vec<u8>, CoreError> {
+    use sha2::Digest;
+    // Stable, simple binary layout: format_version || cluster_id ||
+    // invite_nonce || expires_at_ms_be8 || inner_payload_hash.
+    let _ = sha2::Sha256::new(); // ensure import is used
+    let mut out = Vec::new();
+    out.push(outer.format_version.as_u8());
+    out.extend_from_slice(outer.cluster_id.as_bytes());
+    out.extend_from_slice(&outer.invite_nonce);
+    out.extend_from_slice(&outer.expires_at_ms.to_be_bytes());
+    out.extend_from_slice(&outer.inner_payload_hash);
+    Ok(out)
 }
