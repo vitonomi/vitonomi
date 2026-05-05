@@ -11,6 +11,15 @@ and glossary.
 
 IMPORTANT: These rules are non-negotiable.
 
+- **Hub-blindness**: The hosted hub MUST NEVER read plaintext user
+  data, including metadata. Stricter than zero-knowledge-of-content;
+  also zero-knowledge-of-membership, zero-knowledge-of-username,
+  zero-knowledge-of-admin-actions. The hub reads only `cluster_id`,
+  public keys, opaque random ids, connection-observable state, and
+  signed envelope shells with sealed bodies (chain entries, invite
+  outer summaries). Everything else (username → `lookup_id`, vault
+  names, admin chain payloads, Argon2 salts, invite inner payloads)
+  is sealed. See `docs/architecture.md#hub-blindness-trust-topology`.
 - **Encryption boundary**: ALL encryption / decryption / key derivation
   happens in the `core` Rust crate (or in `core-wasm/` for browser
   consumption), running client-side (browser, CLI, mobile). NEVER

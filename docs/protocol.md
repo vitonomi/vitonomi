@@ -67,13 +67,14 @@ default tagged-enum representation).
 ```rust
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum BusFrame {
-    Challenge(ChallengeFrame),          // hub → vault
-    ChallengeResponse(ChallengeResponseFrame), // vault → hub
+    Challenge(ChallengeFrame),                   // hub → vault
+    ChallengeResponse(ChallengeResponseFrame),   // vault → hub
     SessionEstablished(SessionEstablishedFrame), // hub → vault
-    Heartbeat(HeartbeatFrame),          // vault → hub
-    ChainAppend(ChainAppendFrame),      // hub → vault
-    Error(ErrorFrame),                  // either direction
-    Disconnect(DisconnectFrame),        // either direction
+    Heartbeat(HeartbeatFrame),                   // vault → hub
+    ChainAppend(ChainAppendFrame),               // hub → vault
+    ChainAdvertise(ChainAdvertiseFrame),         // either direction
+    Error(ErrorFrame),                           // either direction
+    Disconnect(DisconnectFrame),                 // either direction
 }
 ```
 
@@ -150,15 +151,61 @@ signature ties each heartbeat to a fresh `ts_ms`.
 
 ```text
 ChainAppendFrame {
-  entry: AdminChainEntry,
+  entry: AdminChainEntryOuter,   // see data-format.md
 }
 ```
 
-Hub broadcasts a freshly accepted admin-chain entry (e.g. a new
-`vault-enroll` after another vault accepts) to every online
-vault. Receivers MUST verify the signature against the stored
-cluster admin pubkey AND verify hash-link continuity against the
-entry they currently hold as head before persisting.
+Hub broadcasts a freshly admin-ratified admin-chain entry (e.g. a
+new `vault-enroll` after the admin's next login) to every online
+vault. The entry is the **outer envelope** — its `sealed_inner`
+field is opaque to the hub. Receivers MUST:
+
+1. Verify `sig_admin_outer` against the stored cluster admin
+   pubkey.
+2. Verify hash-link continuity against the entry they currently
+   hold as head.
+3. AEAD-open `sealed_inner` under `cluster_shared_key` and
+   verify `sig_admin_inner` over the unsealed action+payload.
+
+Failures send an `Error` frame and a `Disconnect`.
+
+### `ChainAdvertise` (either direction)
+
+```text
+ChainAdvertiseFrame {
+  cluster_id:    bytes(32),
+  highest_seq:   uint64,
+  head_hash:     bytes(32),    // sha256(CBOR(outer at seq = highest_seq))
+}
+```
+
+Sent on every reconnect by both sides:
+- The hub sends one immediately after `SessionEstablished`
+  reporting its view of the chain head.
+- The vault sends one at the same time reporting its local
+  view.
+
+If the two disagree the **vault is authoritative**. The hub's
+chain copy is **advisory cache** — it cannot be trusted to serve
+the canonical chain under hub-blindness because the hub cannot
+read sealed payloads and so cannot detect content-level forks.
+
+When a vault receives a `ChainAdvertise` indicating the hub is
+*ahead* of its local copy, it issues `GET /v1/admin-chain/
+{cluster_id}?from_seq=<vault_local + 1>` to catch up.
+
+When a vault sees the hub is *behind* its local copy, it MUST
+log + alert and request the same advertise from peer vaults via
+the data-plane gossip channel (libp2p-rs in v1.1; for the
+mini-MVP a vault MAY periodically push its `ChainAdvertise` to
+known peer vault URLs over plain HTTPS, falling back to "warn
+the user via CLI status" when no peer is reachable).
+
+**Single-vault clusters have no peer to gossip with.** They
+trade integrity-against-malicious-hub for the offline chain
+backup that `vitonomi-cli` writes to the seed-phrase backup
+file at every login. See
+[`threat-model.md`](threat-model.md#adversarial-hub-against-chain-integrity).
 
 ### `Error` (either direction)
 
@@ -181,8 +228,11 @@ when the connection is unrecoverable. Common codes:
 | `protocol.malformed`          | either | CBOR decode failure or schema mismatch                  |
 | `protocol.frame_too_large`    | either | Frame exceeded 64 KiB                                   |
 | `protocol.unsupported_kind`   | either | Frame kind not in this version's enum                   |
-| `chain.signature_invalid`     | vault  | `ChainAppend` entry's signature failed                  |
+| `chain.signature_invalid`     | vault  | `ChainAppend` outer or inner signature failed           |
 | `chain.hash_link_break`       | vault  | `prev_hash` ≠ local head's hash                         |
+| `chain.seal_open_failed`      | vault  | AEAD-open of `sealed_inner` failed (wrong key / tamper) |
+| `chain.advertise_mismatch`    | vault  | Hub advertised a head behind local; manual reconciliation required |
+| `chain.key_epoch_stale`       | vault  | Outer `key_epoch` newer than vault's; need cluster-key refresh |
 
 ### `Disconnect` (either direction)
 

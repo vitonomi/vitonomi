@@ -81,15 +81,22 @@ them.
 
 ## Mini-MVP scope
 
-This document grows incrementally. As of mini-MVP Step 2 the
-**Key blob**, **Seed phrase**, **Invite token**, and **Admin
-chain entry** sections below are normative; the rest are still
-TBD (record-types, snapshot envelope, head pointer, alias
-directory) and will land with their respective implementation
-phases. The Rust types backing the normative sections live in
-`vitonomi-core::crypto::*` and `vitonomi-core::protocol::wire::*`
-— those struct definitions are the source-of-truth byte layouts
-that this document narrates.
+This document grows incrementally. As of mini-MVP Step 2 (with the
+Step-2.1 hub-blindness amendment of 2026-05-05) the
+**Key blob**, **Seed phrase**, **Cluster shared key + pepper**,
+**`user_lookup_id`**, **Invite token**, and **Admin chain entry**
+sections below are normative; the rest are still TBD (record-types,
+snapshot envelope, head pointer, alias directory) and will land
+with their respective implementation phases. The Rust types backing
+the normative sections live in `vitonomi-core::crypto::*` and
+`vitonomi-core::protocol::wire::*` — those struct definitions are
+the source-of-truth byte layouts that this document narrates.
+
+> **Hub-blindness invariant.** Every section below is designed so
+> the hub reads only the absolute minimum coordination metadata.
+> See [`architecture.md`](architecture.md#hub-blindness-trust-topology)
+> for the trust topology. This document is the byte-level
+> commitment.
 
 ## Key blob
 
@@ -130,17 +137,25 @@ ASCII bytes `0x56 0x4b 0x42 0x31`.
 
 ```text
 MasterSecretKeys {
-  identity:      bytes(32),  // ML-DSA-65 FIPS 204 seed `xi`
-  cluster_admin: bytes(32),  // ML-DSA-65 FIPS 204 seed `xi`
-  kem:           bytes(64),  // ML-KEM-768 FIPS 203 seed (d || z)
+  identity:           bytes(32),  // ML-DSA-65 FIPS 204 seed `xi`
+  cluster_admin:      bytes(32),  // ML-DSA-65 FIPS 204 seed `xi`
+  kem:                bytes(64),  // ML-KEM-768 FIPS 203 seed (d || z)
+  cluster_pepper:     bytes(32),  // see "Cluster pepper + lookup_id"
+  cluster_shared_key: bytes(32),  // see "Cluster shared key"
 }
 ```
 
-The seed-only encoding is a deliberate choice: storing just the
-FIPS internal seeds (rather than the expanded signing /
-decapsulation keys) gives a compact, format-stable payload that
-deterministically regenerates the full keypair on every use.
-See [`autonomi-compat.md`](autonomi-compat.md) for the rationale.
+The seed-only encoding for the keypairs is a deliberate choice:
+storing just the FIPS internal seeds (rather than the expanded
+signing / decapsulation keys) gives a compact, format-stable
+payload that deterministically regenerates the full keypair on
+every use. See [`autonomi-compat.md`](autonomi-compat.md) for the
+rationale.
+
+`cluster_pepper` and `cluster_shared_key` are HKDF-derived from
+the BIP-39 seed at registration (info strings below) and stored
+in the blob so loss of the hub doesn't lose them. Both are
+deterministic, so seed-phrase recovery rebuilds them.
 
 ### Argon2id parameter encoding
 
@@ -168,11 +183,73 @@ BIP-39 wordlist (English; other languages v1.1+). **24-word
 default.** Entropy is a 32-byte random value; checksum +
 encoding produced by the upstream `bip39` crate.
 
-The 64-byte BIP-39 PBKDF2 seed (`mnemonic.to_seed("")`) is
-**reserved** as the input to a future deterministic
-seed → master-key derivation; until `ml-dsa` exposes the
-FIPS 204 internal-seed API on a non-rc release, master keys are
-random and live solely in the AEAD-encrypted key blob.
+The 64-byte BIP-39 PBKDF2 seed (`mnemonic.to_seed("")`) is the
+input to:
+
+- `cluster_pepper = HKDF-SHA-256(seed, info="vitonomi/cluster_pepper/v1", length=32)`
+- `cluster_shared_key = HKDF-SHA-256(seed, info="vitonomi/cluster_shared_key/v1", length=32)`
+
+The master keypairs (`identity`, `cluster_admin`, `kem`)
+remain random under the mini-MVP design and live in the
+AEAD-encrypted key blob; once `ml-dsa` exposes the FIPS 204
+internal-seed API on a non-rc release, those will become
+deterministic from the BIP-39 seed too.
+
+## Cluster pepper + `user_lookup_id`
+
+`cluster_pepper` is a 32-byte secret used to defeat bulk username
+enumeration by a malicious hub. It is HKDF-derived from the BIP-39
+seed (see above) and stored ONLY inside the encrypted key blob —
+the hub never sees it.
+
+`user_lookup_id` is the hub-side index for a user record. It is
+NOT the username:
+
+```text
+user_lookup_id =
+  argon2id(
+    password = utf8_bytes(username) || cluster_pepper,
+    salt     = cluster_id,
+    m        = 32 * 1024,    // 32 MiB
+    t        = 2,
+    p        = 1,
+    out_len  = 32,
+  )
+```
+
+Properties:
+
+- The hub stores users keyed by `user_lookup_id` and never sees
+  the raw `username` or `cluster_pepper`.
+- Bulk enumeration over a hosted-hub-known cluster_id requires
+  Argon2id cost per guess AND a 256-bit pepper guess —
+  computationally infeasible.
+- Cross-cluster correlation (same username on two clusters) is
+  broken because each cluster has a different pepper.
+- **Residual risk:** a hosted-hub operator who registers as a
+  user on a target cluster learns its `cluster_pepper` (it's in
+  *their* key blob) and can then test "is `username` registered
+  here?" one Argon2 hash at a time. This is a targeted-
+  confirmation leak; OPAQUE PAKE in v1.1+ closes it.
+
+## Cluster shared key
+
+`cluster_shared_key` is a 32-byte symmetric key (XChaCha20-Poly1305)
+used to AEAD-seal cluster-scoped metadata (vault directory entries,
+admin chain payloads, future alias directory entries). It is
+HKDF-derived from the BIP-39 seed (see above) so seed-phrase
+recovery regenerates it.
+
+Distribution to other cluster members:
+- **New vault during accept** — sealed inside the invite's inner
+  payload (which is transmitted out-of-band admin → vault
+  operator; the hub never sees the inner payload). See "Invite
+  token" below.
+- **New cluster member** (v1.1+) — sealed via ML-KEM-768 to the
+  invitee's identity pubkey at invite issue time.
+
+Rotation on member revocation is v1.1+; reserve `key_epoch: u32`
+in every sealed envelope from day one so rotation is non-breaking.
 
 ## Chunk format
 
@@ -214,80 +291,144 @@ file.
 ## Invite token
 
 Admin-signed authorisation for a single vault to join a cluster.
-The CLI builds it locally; the hub stores it for TTL tracking
-and replay defense.
+**Two-layered** under hub-blindness: an outer summary the hub
+stores for admission gating, and an inner payload (containing
+`vault_role`, `hub_url`, `hub_cert_fingerprint`, and the sealed
+`cluster_shared_key`) that the admin transmits out-of-band to
+the vault operator and the hub NEVER sees.
 
-### Outer envelope (CBOR)
-
-```text
-InviteToken {
-  body:              InviteTokenBody,
-  sig_cluster_admin: bytes(~3309),  // ML-DSA-65 over CBOR(body)
-}
-```
-
-### Body
+### Inner payload (CBOR; admin → vault operator only)
 
 ```text
-InviteTokenBody {
+InviteInnerPayload {
   format_version:        uint8 = 1,
-  cluster_id:            bytes(32),
   vault_role:            string,  // "storage" (closed enum)
   hub_url:               string,
   hub_cert_fingerprint:  string,  // "sha256:<base64url-no-padding>"
                                   //   SPKI hash of hub TLS leaf cert
-  invite_nonce:          bytes(32),  // single-use; cluster-scoped uniqueness
-  expires_at_ms:         uint64,     // UNIX millis
+  sealed_cluster_key:    bytes(72),  // nonce(24) || aead_ct(32 + tag 16)
+                                     //   under per-invite KEK (see below)
 }
 ```
 
-Strict parse — unknown `vault_role` values, malformed
-`hub_cert_fingerprint` patterns, and missing required fields are
-all parse errors. The `format_version` MUST equal the reader's
-expected version.
+The `sealed_cluster_key` is `cluster_shared_key` AEAD-sealed under
+a per-invite key-encrypting key (KEK) the admin derives as:
 
-### Acceptance signature
+```text
+invite_kek = HKDF-SHA-256(
+  ikm  = cluster_admin_secret_key_bytes,
+  info = "vitonomi/invite_kek/v1",
+  salt = invite_nonce,   // 32 bytes
+  out_len = 32,
+)
+```
 
-When the vault accepts an invite it sends, alongside the invite,
-its own signature over `invite_nonce || vault_pubkey_bytes`
-(simple byte concatenation, no CBOR). This proves possession of
-the vault's secret half before the hub binds the pubkey to the
-cluster.
+Only the cluster admin can compute `invite_kek` (it requires the
+admin sk). The vault, on accept, receives the full inner payload
+and asks the admin (out-of-band, e.g. embedded with the invite)
+for the same `invite_kek`, then unseals `cluster_shared_key`
+locally. The hub is never part of the key delivery path.
+
+> **K2 (this design) vs K1 (rejected).** K1 would have had the
+> admin POST `cluster_shared_key` sealed to each accepted vault's
+> pubkey *after* accept, leaving a "ghost vault" admission window
+> where the hub knew acceptance occurred but the chain didn't
+> reflect it. K2 closes the window: vaults are operational
+> immediately at accept; the chain still ratifies lazily but the
+> cluster shared key is already in the vault's hands.
+
+### Outer summary (CBOR; what the hub stores)
+
+```text
+InviteOuterSummary {
+  format_version:      uint8 = 1,
+  cluster_id:          bytes(32),
+  invite_nonce:        bytes(32),       // single-use; cluster-scoped uniqueness
+  expires_at_ms:       uint64,
+  inner_payload_hash:  bytes(32),       // sha256 of CBOR-encoded InviteInnerPayload
+  sig_cluster_admin:   bytes(~3309),    // ML-DSA-65 over CBOR(everything above)
+}
+```
+
+Hub admission rules:
+
+1. Verify `sig_cluster_admin` against the stored cluster admin
+   pubkey.
+2. **Atomically dedup `invite_nonce`** at the SQL layer (`INSERT
+   ... ON CONFLICT(invite_nonce) DO NOTHING`); reject any second
+   writer.
+3. On accept, verify the vault's submission contains an inner
+   payload whose sha256 equals `inner_payload_hash` (so a vault
+   cannot substitute a different inner).
+
+Strict parse — unknown `format_version`, missing required fields,
+or invalid `cluster_id` are all parse errors.
+
+### Vault acceptance signature
+
+When the vault accepts an invite it sends, alongside the outer
+summary + inner payload + its public key, its own signature over
+`invite_nonce || vault_pubkey_bytes` (simple byte concatenation,
+no CBOR). This proves possession of the vault's secret half
+before the hub binds the pubkey to the cluster.
 
 ## Admin chain entry
 
-Append-only signed log of cluster admin actions, replicated to
-the hub *and* to every vault in the cluster. The chain is the
-mechanism by which cluster identity (membership, revocations,
-admin pubkey) survives hub failover.
+Append-only signed log of cluster admin actions. Under
+hub-blindness the chain entry is **two-layered**: a plaintext
+outer envelope the hub uses for ordering and admission gating,
+and an AEAD-sealed inner body containing the action contents.
 
-### Wire format (CBOR)
+The chain is replicated to the hub *and* to every vault in the
+cluster. **The hub's chain copy is advisory** — only vaults are
+trusted to serve the canonical chain. See
+[`threat-model.md`](threat-model.md#adversarial-hub-against-chain-integrity)
+for the attack analysis and
+[`architecture.md`](architecture.md#chain-integrity-is-a-vault-property-not-a-hub-property)
+for the mitigations.
+
+### Outer envelope (CBOR; what the hub stores)
 
 ```text
-AdminChainEntry {
-  format_version: uint8 = 1,
-  cluster_id:     bytes(32),
-  prev_hash:      bytes(32),  // sha256 of previous CBOR-encoded entry; zero32 for genesis
-  seq:            uint64,     // 0 for genesis, monotonic +1
-  action:         string,     // "cluster-init" | "vault-enroll" | "vault-revoke" | "user-invite" | "user-revoke"
-  payload:        bytes(var), // CBOR, action-specific
-  sig:            bytes(~3309), // ML-DSA-65 over CBOR(EntryBody)
+AdminChainEntryOuter {
+  format_version:      uint8 = 1,
+  cluster_id:          bytes(32),
+  prev_hash:           bytes(32),       // sha256 of previous outer; zero32 for genesis
+  seq:                 uint64,          // 0 for genesis, monotonic +1
+  admin_pubkey_epoch:  uint32 = 0,      // reserved for admin-key rotation (v1.1+)
+  key_epoch:           uint32 = 0,      // reserved for cluster_shared_key rotation (v1.1+)
+  sealed_inner:        bytes(var),      // nonce(24) || aead_ct(CBOR(InnerBody) + tag 16)
+                                        //   AEAD-sealed under cluster_shared_key
+                                        //   AAD = cluster_id || seq_be8 || prev_hash
+  sig_admin_outer:     bytes(~3309),    // ML-DSA-65 over CBOR of all fields above
 }
 ```
 
-`EntryBody` (input to `sig`) is everything except `sig` itself,
-serialised in the same order:
+The hub verifies `sig_admin_outer` against the cluster admin
+pubkey to gate admission (no forged entries) and enforces
+seq+prev_hash continuity (no out-of-order writes). The hub does
+NOT — and cannot — read `sealed_inner`.
+
+### Inner body (CBOR; sealed; only cluster members read this)
 
 ```text
-EntryBody {
-  format_version: uint8,
-  cluster_id:     bytes(32),
-  prev_hash:      bytes(32),
-  seq:            uint64,
-  action:         string,
-  payload:        bytes(var),
+AdminChainEntryInner {
+  format_version:  uint8 = 1,
+  action:          string,    // "cluster-init" | "vault-enroll" | "vault-revoke" | "user-invite" | "user-revoke"
+  payload:         bytes(var), // CBOR, action-specific
+  sig_admin_inner: bytes(~3309), // ML-DSA-65 over (action || payload)
+                                 //   defends against an admin-key holder reusing
+                                 //   sealed_inner content from a different chain position
 }
 ```
+
+Why a second admin signature inside? Because `sig_admin_outer`
+covers the sealed bytes (which the admin produces) but not the
+*content* directly. `sig_admin_inner` lets a vault verify "this
+content was admin-authorised" without depending on the AEAD
+sealing for authenticity (defense-in-depth: if a future revision
+of this format changes the sealing, the inner sig is still a
+content-only attestation).
 
 ### Action enum
 
@@ -305,32 +446,68 @@ Closed enum — readers reject unknown values with a typed error.
 
 - `seq == 0`
 - `prev_hash == zero32` (32 bytes of `0x00`)
-- `action == "cluster-init"`
+- `action == "cluster-init"` (after unsealing)
+- `admin_pubkey_epoch == 0`
+- `key_epoch == 0`
 
 A chain whose seq-0 entry violates any of these MUST be rejected.
 
 ### Hash linking
 
 For every entry `n+1`, `prev_hash` is computed as
-`sha256(CBOR-encode(entry_n))` — that is, the SHA-256 of the
-fully-CBOR-encoded entry including its signature, NOT just the
-signing body. This binds each entry not only to its predecessor's
-contents but also to the predecessor's signature (so a bit-flip
-in any prior signature breaks the chain at that point and every
-subsequent entry).
+`sha256(CBOR-encode(outer_envelope_n))` — that is, the SHA-256 of
+the fully-CBOR-encoded *outer* envelope including
+`sig_admin_outer`, NOT the unsealed inner. This binds each entry
+to its predecessor while still allowing the hub to compute and
+verify `prev_hash` without ever decrypting `sealed_inner`.
 
-### Verification
+### Verification (vault side)
 
-`verify_chain(admin_pk, cluster_id, &entries)` runs:
+`verify_chain(admin_pk, cluster_shared_key, cluster_id, &outers)` runs:
 1. Reject empty chains.
-2. For each entry in order:
-   - `entry.cluster_id == cluster_id`.
-   - `entry.seq == i` (where `i` is the index, 0-based).
-   - `entry.prev_hash == expected_prev` (zero32 for `i = 0`,
-     `sha256(CBOR(entries[i-1]))` otherwise).
-   - For `i = 0`: `entry.action == "cluster-init"`.
-   - `verify_entry(admin_pk, entry)` succeeds.
-3. Set `expected_prev = sha256(CBOR(entry))` and continue.
+2. For each outer envelope in order:
+   - `outer.cluster_id == cluster_id`.
+   - `outer.seq == i` (0-based).
+   - `outer.prev_hash == expected_prev` (zero32 for `i = 0`,
+     `sha256(CBOR(outers[i-1]))` otherwise).
+   - `verify_outer(admin_pk, outer)` succeeds.
+   - AEAD-open `outer.sealed_inner` with `cluster_shared_key`
+     and AAD = `cluster_id || seq_be8 || prev_hash`.
+   - Verify `inner.sig_admin_inner` against `admin_pk`.
+   - For `i = 0`: `inner.action == "cluster-init"`.
+3. Set `expected_prev = sha256(CBOR(outer))` and continue.
+
+### Pending acceptance (hub-side, NOT a chain entry)
+
+When a vault accepts an invite under K2, the hub records a
+**pending acceptance** alongside the vault directory:
+
+```text
+PendingAcceptance {
+  acceptance_id:           string,         // opaque random
+  vault_id:                bytes(16),
+  vault_pubkey:            bytes(~1952),   // ML-DSA-65 (plaintext, needed for WS auth)
+  invite_nonce:            bytes(32),
+  sealed_acceptance_meta:  bytes(var),     // AEAD-sealed under invite_kek
+                                           //   { vault_name, accept_ts_ms, vault_role }
+  created_at_ms:           uint64,
+  expires_at_ms:           uint64,         // created_at_ms + 7 days (TTL)
+}
+```
+
+Pending acceptances are NOT chain entries. The vault is operational
+(K2 already delivered the cluster shared key) but does not appear
+in the formal admin chain. On the admin's next login, the CLI
+fetches pending acceptances, verifies each, signs proper
+`vault-enroll` chain entries, and posts them via
+`POST /v1/admin-chain/{cluster_id}`. After ratification the
+pending row is purged. Pending acceptances older than 7 days are
+purged unconditionally; the corresponding vault must be
+re-invited.
+
+`sealed_acceptance_meta` uses the per-invite KEK so even the
+pending row leaks no metadata to the hub beyond the irreducible
+plaintext fields (`vault_pubkey`, `invite_nonce`, timestamps).
 
 ## Alias-pubkey directory entry — TBD (Phase 8)
 

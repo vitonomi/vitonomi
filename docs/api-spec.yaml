@@ -19,10 +19,18 @@ info:
     `data-format.md`.
 
     This is the **mini-MVP slice** (Step 2 of the auth + networking
-    plan in `~/.claude/plans/`). Endpoints reserved for later phases
-    (record reads/writes, head pointers, alias directory, mx push,
-    subscription billing) live in their own future revisions of this
-    file.
+    plan in `~/.claude/plans/`) with the **Step-2.1 hub-blindness
+    amendment** (2026-05-05): every endpoint here is designed so the
+    hub reads only the absolute minimum coordination metadata. See
+    `architecture.md#hub-blindness-trust-topology` for the trust
+    topology and `data-format.md` for the byte layouts. Schema names
+    that previously carried plaintext user metadata (e.g. `Username`,
+    `InviteTokenBody`) have been replaced with their hub-blind
+    equivalents (e.g. `UserLookupId`, `InviteOuterSummary`).
+
+    Endpoints reserved for later phases (record reads/writes, head
+    pointers, alias directory, mx push, subscription billing) live in
+    their own future revisions of this file.
   license:
     name: AGPL-3.0-only
     identifier: AGPL-3.0-only
@@ -48,15 +56,15 @@ tags:
   - name: admin-chain
     description: Append-only signed log of cluster admin actions
   - name: meta
-    description: Health and liveness
+    description: Status / liveness
 
 paths:
-  # ─── Health ────────────────────────────────────────────────────────
-  /v1/health:
+  # ─── Status ────────────────────────────────────────────────────────
+  /v1/status:
     get:
       tags: [meta]
-      operationId: getHealth
-      summary: Liveness probe
+      operationId: getStatus
+      summary: Hub status / liveness probe
       description: |
         Unauthenticated. Returns `{ status: "ok", version }` only —
         MUST NOT leak cluster count, DB state, or any per-cluster
@@ -68,7 +76,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Health'
+                $ref: '#/components/schemas/Status'
 
   # ─── Clusters (register + restore) ─────────────────────────────────
   /v1/clusters:
@@ -565,7 +573,7 @@ components:
 
   schemas:
     # ─── Common ────────────────────────────────────────────────────
-    Health:
+    Status:
       type: object
       required: [status, version]
       properties:
@@ -590,15 +598,15 @@ components:
           type: object
           additionalProperties: true
 
-    Username:
+    UserLookupId:
       type: string
       description: |
-        Lowercase ASCII alphanumeric + `-` + `_`, length 3–32.
-        DNS-safe so a future `<username>.vito.gg` subdomain works
-        without renormalisation.
-      minLength: 3
-      maxLength: 32
-      pattern: '^[a-z0-9_-]{3,32}$'
+        Hub-side index for a user record. Computed client-side as
+        `argon2id(username || cluster_pepper, salt=cluster_id,
+        m=32MiB, t=2, out_len=32)` then base64url-encoded with no
+        padding. The hub never sees the raw username or the cluster
+        pepper. See `data-format.md#cluster-pepper--user_lookup_id`.
+      pattern: '^[A-Za-z0-9_-]{43}$'
 
     ClusterId:
       type: string
@@ -760,7 +768,7 @@ components:
     ClusterRegisterRequest:
       type: object
       required:
-        - username
+        - lookup_id
         - master_pubkeys
         - auth_salt
         - enc_salt
@@ -768,8 +776,8 @@ components:
         - encrypted_key_blob
         - genesis_entry
       properties:
-        username:
-          $ref: '#/components/schemas/Username'
+        lookup_id:
+          $ref: '#/components/schemas/UserLookupId'
         master_pubkeys:
           $ref: '#/components/schemas/MasterPublicKeys'
         auth_salt:
@@ -813,7 +821,7 @@ components:
     ClusterRestoreRequest:
       type: object
       required:
-        - username
+        - lookup_id
         - master_pubkeys
         - auth_salt
         - enc_salt
@@ -821,8 +829,8 @@ components:
         - encrypted_key_blob
         - chain_export
       properties:
-        username:
-          $ref: '#/components/schemas/Username'
+        lookup_id:
+          $ref: '#/components/schemas/UserLookupId'
         master_pubkeys:
           $ref: '#/components/schemas/MasterPublicKeys'
         auth_salt:
@@ -851,10 +859,10 @@ components:
 
     LoginStartRequest:
       type: object
-      required: [username]
+      required: [lookup_id]
       properties:
-        username:
-          $ref: '#/components/schemas/Username'
+        lookup_id:
+          $ref: '#/components/schemas/UserLookupId'
 
     LoginStartResponse:
       type: object

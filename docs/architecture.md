@@ -127,14 +127,97 @@ compatibility statement.
 vitonomi enforces these invariants cryptographically; they are not
 policy decisions.
 
-| Component              | Cannot read               | Why                                                                    |
-| ---------------------- | ------------------------- | ---------------------------------------------------------------------- |
-| Hub                    | User content, keys        | Stores AEAD-encrypted blobs only; never receives plaintext             |
-| Vault                  | User content, keys        | Stores AEAD-then-self-encrypted chunks; user holds the AEAD key        |
-| Peer vault             | Other users' content      | Per-user labelling; AEAD key is user-specific                          |
-| mx                     | User content (post-relay) | Plaintext exists only in process RAM during DATA phase                 |
-| vitonomi (the company) | Any user's content        | None of the above components ever decrypt                              |
-| Cluster admin          | Other members' content    | Each member holds their own keys; admin can see usage byte-counts only |
+| Component              | Cannot read                                | Why                                                                    |
+| ---------------------- | ------------------------------------------ | ---------------------------------------------------------------------- |
+| Hub                    | User content, **keys, and metadata**       | Hub-blindness invariant — see below                                    |
+| Vault                  | User content, keys                         | Stores AEAD-then-self-encrypted chunks; user holds the AEAD key        |
+| Peer vault             | Other users' content                       | Per-user labelling; AEAD key is user-specific                          |
+| mx                     | User content (post-relay)                  | Plaintext exists only in process RAM during DATA phase                 |
+| vitonomi (the company) | Any user's content + metadata              | The hub-blindness invariant binds the hosted hub too                   |
+| Cluster admin          | Other members' content                     | Each member holds their own keys                                       |
+
+## Hub-blindness (trust topology)
+
+**Binding invariant.** The hub — including the hosted deployment at
+`hub.vitonomi.com` — MUST NEVER read plaintext user data, including
+**metadata**. This is stricter than zero-knowledge-of-content; it is
+also zero-knowledge-of-membership, zero-knowledge-of-username, and
+zero-knowledge-of-admin-actions.
+
+The hub is allowed to read only the absolute minimum coordination
+metadata:
+
+- `cluster_id` (32-byte hash, no info content) — for routing.
+- Public keys (ML-DSA-65 / ML-KEM-768) — public by definition;
+  needed to verify signatures at the WS handshake gate and at the
+  invite admission gate.
+- Opaque random ids (`user_id`, `vault_id`, `session_id`,
+  `invite_nonce`, `challenge_id`).
+- Connection-observable state (`last_seen` ts from heartbeats,
+  online/offline status, hashed remote IP). Inherent to the WS
+  broker role.
+- Signed-envelope shells with sealed bodies — chain entries
+  `{ cluster_id, seq, prev_hash, sealed_blob, sig_admin_outer }`
+  and invite outer summaries
+  `{ cluster_id, invite_nonce, expires_at_ms, inner_payload_hash,
+    sig_admin_outer }`. The hub verifies `sig_admin_outer` against
+  the cluster admin pubkey to gate admission; the inner body stays
+  opaque.
+- Reserved `format_version`, `key_epoch`, `admin_pubkey_epoch`
+  fields (no info content).
+
+Everything else is sealed. See [`data-format.md`](data-format.md)
+for the byte layouts.
+
+### Cluster shared key
+
+A 32-byte symmetric key, **HKDF-derived deterministically from the
+BIP-39 seed** (info `"vitonomi/cluster_shared_key/v1"`). Distributed
+to vaults via the **K2 invite-inner-payload** mechanism (the cluster
+shared key is sealed inside the invite token's inner payload, which
+travels admin → vault operator out-of-band). All cluster-scoped
+metadata (vault directory entries, admin chain payloads) is
+AEAD-sealed under this key.
+
+### `cluster_pepper`
+
+A 32-byte secret HKDF-derived from the BIP-39 seed (info
+`"vitonomi/cluster_pepper/v1"`) and stored ONLY inside the
+encrypted key blob. Used to construct `user_lookup_id =
+argon2id(username || cluster_pepper, salt=cluster_id, m=32 MiB,
+t=2)`. Forces a malicious hub to defeat both Argon2 cost AND a
+256-bit guess to enumerate usernames; blocks cross-cluster
+correlation entirely.
+
+### Chain integrity is a vault property, not a hub property
+
+The hub stores admin chain envelopes, but it cannot be trusted to
+serve "the chain" under hub-blindness. A hosted operator can:
+- **Suppress.** Refuse to serve a recent entry; return an older
+  head.
+- **Fork.** If the admin signs two entries at the same `(seq,
+  prev_hash)`, serve one to vault A and the other to vault B.
+- **Replay an old prefix.** Hand a brand-new vault during
+  enrollment a truncated prefix that hides revocations.
+
+Mitigations are normative:
+
+1. **Vault peer gossip.** The vault-bus emits a `ChainAdvertise
+   { highest_seq, head_hash }` frame on every reconnect; vaults
+   log + alert on regression vs. local state and request peer
+   copies via the data plane.
+2. **Cluster restore from vaults only.** `vitonomi-cli cluster
+   restore` accepts chain exports from a vault, never from the
+   dying hub (which may be malicious).
+3. **Single-vault downgrade.** N=1 clusters have no peer to
+   gossip with. The CLI MUST auto-export the latest chain to the
+   seed-phrase backup file at every login and warn when the
+   backup is stale > 7 days. Without the offline copy,
+   single-vault hub-blindness is partial: the user gets
+   confidentiality but not integrity against a malicious hub.
+
+See [`threat-model.md`](threat-model.md#adversarial-hub-against-chain-integrity)
+for the full attack analysis.
 
 ## Single-cluster topology
 
