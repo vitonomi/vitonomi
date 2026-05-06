@@ -113,6 +113,23 @@ fn ml_dsa_65_signing_from_seed(
     Ok(MlDsa65::from_seed(&Array::from(xi)))
 }
 
+/// Re-derive the verifying (public) key from a 32-byte ML-DSA-65
+/// secret-key seed. Used by the vault daemon when loading its
+/// persisted keypair on disk to populate the public half without
+/// storing it twice.
+///
+/// # Errors
+///
+/// Returns `CryptoError::Signature` on bad seed length.
+pub fn ml_dsa_65_signing_pubkey_from_seed(
+    sk: &MlDsa65SecretKey,
+) -> Result<MlDsa65PublicKey, CryptoError> {
+    let signing = ml_dsa_65_signing_from_seed(sk)?;
+    Ok(MlDsa65PublicKey(
+        signing.verifying_key().encode().as_slice().to_vec(),
+    ))
+}
+
 /// Sign `message` with `sk`. Detached signature.
 ///
 /// # Errors
