@@ -2915,6 +2915,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vitonomi-integration"
+version = "0.0.0"
+dependencies = [
+ "reqwest",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "vitonomi-cli",
+ "vitonomi-core",
+ "vitonomi-hub",
+ "vitonomi-vault",
+]
+
+[[package]]
 name = "vitonomi-vault"
 version = "0.0.0"
 dependencies = [

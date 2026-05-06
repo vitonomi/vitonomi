@@ -1,0 +1,33 @@
+[package]
+name = "vitonomi-integration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Top-level integration tests that bind hub + vault + cli together. No production code; the [lib] target is empty."
+
+[lints]
+workspace = true
+
+[lib]
+name = "vitonomi_integration"
+path = "src/lib.rs"
+
+[[test]]
+name = "mini_mvp"
+path = "tests/mini_mvp.rs"
+
+[dev-dependencies]
+vitonomi-core = { path = "../core" }
+vitonomi-hub = { path = "../hub" }
+vitonomi-vault = { path = "../vault" }
+vitonomi-cli = { path = "../clients/cli" }
+
+tokio = { version = "1", features = ["full", "test-util"] }
+tempfile = "3"
+serde_json = "1"
+sha2 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
