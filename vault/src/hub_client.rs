@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use vitonomi_core::protocol::wire::accept::{
     AcceptRequest, AcceptResponse, CreateInviteRequest, CreateInviteResponse,
 };
+use vitonomi_core::protocol::wire::bootstrap::{BootstrapRequest, BootstrapResponse};
 use vitonomi_core::protocol::wire::vault_bus::BusFrame;
 
 /// Construct a `reqwest::Client` that pins the hub's TLS leaf cert
@@ -95,6 +96,36 @@ pub async fn accept_invite(
         .json()
         .await
         .context("decode accept response")?;
+    Ok(resp)
+}
+
+/// Submit a `BootstrapRequest` to `/v1/clusters/bootstrap`. Used by
+/// the vault on `start` so a hub that has lost its cluster record
+/// (typical after an `InMemoryHub` reboot) can re-create it from the
+/// vault's chain copy + persisted membership proof. Idempotent: the
+/// hub returns the existing `vault_id` if the cluster + vault are
+/// already registered.
+///
+/// # Errors
+///
+/// Network / status / decode failures.
+pub async fn bootstrap_cluster(
+    client: &reqwest::Client,
+    hub_url: &str,
+    req: &BootstrapRequest,
+) -> anyhow::Result<BootstrapResponse> {
+    let url = format!("{}/v1/clusters/bootstrap", hub_url.trim_end_matches('/'));
+    let resp = client
+        .post(url)
+        .json(req)
+        .send()
+        .await
+        .context("send bootstrap")?
+        .error_for_status()
+        .context("bootstrap status")?
+        .json()
+        .await
+        .context("decode bootstrap response")?;
     Ok(resp)
 }
 

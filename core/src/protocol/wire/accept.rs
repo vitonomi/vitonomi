@@ -84,3 +84,21 @@ pub struct AcceptResponse {
     /// `cluster_admin_pubkey` and unseals locally.
     pub chain_head: crate::crypto::admin_chain::AdminChainEntry,
 }
+
+/// Stable byte layout the cluster admin signs when producing
+/// `InviteOuterSummary::sig_admin_outer`. Identical bytes must be
+/// reproduced anywhere the signature is verified (admin CLI on
+/// invite issue, hub on `create_invite` / `accept` / `bootstrap`,
+/// vault on local invite-sanity check).
+#[must_use]
+pub fn invite_outer_signed_bytes(outer: &InviteOuterSummary) -> Vec<u8> {
+    let mut out = Vec::with_capacity(
+        1 + outer.cluster_id.as_bytes().len() + outer.invite_nonce.len() + 8 + 32,
+    );
+    out.push(outer.format_version.as_u8());
+    out.extend_from_slice(outer.cluster_id.as_bytes());
+    out.extend_from_slice(&outer.invite_nonce);
+    out.extend_from_slice(&outer.expires_at_ms.to_be_bytes());
+    out.extend_from_slice(&outer.inner_payload_hash);
+    out
+}

@@ -90,23 +90,21 @@ pub async fn run<P: Prompts + ?Sized>(
     h.update(&inner_bytes);
     let inner_payload_hash = h.finalize().to_vec();
 
-    let mut signed = Vec::new();
-    signed.push(FormatVersion::V1.as_u8());
-    signed.extend_from_slice(st.cluster_id.as_bytes());
-    signed.extend_from_slice(&invite_nonce);
-    signed.extend_from_slice(&expires_at_ms.to_be_bytes());
-    signed.extend_from_slice(&inner_payload_hash);
-    let sig_admin_outer =
-        ml_dsa_65_sign(&admin_sk, &signed).map_err(|e| anyhow!("sign outer: {e}"))?;
-
-    let outer = InviteOuterSummary {
+    // Two-step build: construct the unsigned outer with a placeholder
+    // signature, compute the canonical signed-bytes via the public
+    // helper, then attach the admin signature. Keeps the byte layout
+    // in lockstep with hub + bootstrap verification paths.
+    let mut outer = InviteOuterSummary {
         format_version: FormatVersion::V1,
         cluster_id: st.cluster_id,
         invite_nonce: invite_nonce.clone(),
         expires_at_ms,
         inner_payload_hash,
-        sig_admin_outer,
+        sig_admin_outer: vitonomi_core::crypto::pq::MlDsa65Signature(vec![]),
     };
+    let signed = vitonomi_core::protocol::wire::accept::invite_outer_signed_bytes(&outer);
+    outer.sig_admin_outer =
+        ml_dsa_65_sign(&admin_sk, &signed).map_err(|e| anyhow!("sign outer: {e}"))?;
 
     // POST the outer summary to the hub.
     let client = hub_client::default_client()?;

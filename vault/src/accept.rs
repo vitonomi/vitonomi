@@ -90,7 +90,7 @@ pub async fn run(
         invite_outer: combined.outer.clone(),
         invite_inner: combined.inner.clone(),
         vault_pubkey: id.public.clone(),
-        sig_vault,
+        sig_vault: sig_vault.clone(),
     };
 
     let resp = hub_client::accept_invite(&client, &cfg.hub.url, &req)
@@ -102,8 +102,10 @@ pub async fn run(
     cfg.write_to(config_path)
         .with_context(|| format!("rewrite {}", config_path.display()))?;
 
-    // 5. Persist enrollment + chain head locally.
-    persist_enrollment(&cfg.paths.data_dir, &resp)?;
+    // 5. Persist enrollment + chain head locally. The membership
+    //    proof (invite_outer + sig_vault) is captured here so a
+    //    later auto-bootstrap against a fresh hub can re-present it.
+    persist_enrollment(&cfg.paths.data_dir, &resp, &combined.outer, &sig_vault)?;
     let store = ChainStore::open(&cfg.paths.data_dir)?;
     store.replace_all(
         &resp.cluster_admin_pubkey,
@@ -141,8 +143,10 @@ fn sanity_check_invite(c: &CombinedInvite, cfg: &VaultConfig) -> anyhow::Result<
 }
 
 /// `enrollment.json`: post-accept summary persisted alongside the
-/// chain. Holds the cluster_admin_pubkey + vault_id + nonce so
-/// future `start` calls have an offline anchor.
+/// chain. Holds the cluster_admin_pubkey + vault_id + the admin-
+/// signed `invite_outer` summary + the vault's own `sig_vault`. The
+/// last two together form the membership proof a later auto-bootstrap
+/// re-presents to a fresh hub.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Enrollment {
     pub cluster_id: vitonomi_core::types::ClusterId,
@@ -150,23 +154,40 @@ pub struct Enrollment {
     pub cluster_admin_pubkey: vitonomi_core::crypto::pq::MlDsa65PublicKey,
     pub invite_nonce_used: Vec<u8>,
     pub enrolled_at_ms: u64,
+    /// The admin-signed invite outer summary the vault saw at accept.
+    /// Re-presented by the vault during auto-bootstrap to prove an
+    /// admin authorized this enrollment slot. Optional only for
+    /// backward-compat with enrollment files written before the
+    /// bootstrap feature shipped.
+    #[serde(default)]
+    pub invite_outer: Option<vitonomi_core::protocol::wire::accept::InviteOuterSummary>,
+    /// The vault's signature over `invite_nonce || vault_pubkey_bytes`
+    /// produced at accept time. Combined with `invite_outer` it
+    /// proves both admin authorization AND vault key possession to a
+    /// hub that has no prior record of either.
+    #[serde(default)]
+    pub sig_vault: Option<vitonomi_core::crypto::pq::MlDsa65Signature>,
 }
 
-fn persist_enrollment(data_dir: &Path, resp: &AcceptResponse) -> anyhow::Result<()> {
+fn persist_enrollment(
+    data_dir: &Path,
+    resp: &AcceptResponse,
+    invite_outer: &vitonomi_core::protocol::wire::accept::InviteOuterSummary,
+    sig_vault: &vitonomi_core::crypto::pq::MlDsa65Signature,
+) -> anyhow::Result<()> {
     let path = state_dir::enrollment_path(data_dir);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0);
-    // Note: we don't have invite_nonce_used at this point in the
-    // function signature; pass as an extra arg in future. For now
-    // store an empty placeholder.
     let enrollment = Enrollment {
         cluster_id: resp.cluster_id,
         vault_id: resp.vault_id,
         cluster_admin_pubkey: resp.cluster_admin_pubkey.clone(),
-        invite_nonce_used: vec![],
+        invite_nonce_used: invite_outer.invite_nonce.clone(),
         enrolled_at_ms: now_ms,
+        invite_outer: Some(invite_outer.clone()),
+        sig_vault: Some(sig_vault.clone()),
     };
     let json = serde_json::to_vec_pretty(&enrollment).context("serialize enrollment")?;
     state_dir::write_secure(&path, &json)?;
@@ -183,6 +204,20 @@ pub fn load_enrollment(data_dir: &Path) -> anyhow::Result<Enrollment> {
     state_dir::enforce_file_perms_0600(&path)?;
     let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
     serde_json::from_slice(&bytes).context("decode enrollment")
+}
+
+/// Atomically rewrite `enrollment.json` from an in-memory struct.
+/// Used by the auto-bootstrap path when the hub assigns a fresh
+/// `vault_id` for a previously-known vault.
+///
+/// # Errors
+///
+/// Serialize / write / perm-set failures.
+pub fn store_enrollment(data_dir: &Path, enrollment: &Enrollment) -> anyhow::Result<()> {
+    let path = state_dir::enrollment_path(data_dir);
+    let json = serde_json::to_vec_pretty(enrollment).context("serialize enrollment")?;
+    state_dir::write_secure(&path, &json)?;
+    Ok(())
 }
 
 fn unpinned_http_client() -> anyhow::Result<reqwest::Client> {

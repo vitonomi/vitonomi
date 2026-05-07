@@ -454,6 +454,104 @@ async fn hub_state_does_not_retain_raw_session_tokens() {
     );
 }
 
+/// Vault → hub auto-bootstrap: hub-A registers a cluster + accepts
+/// a vault, hub-A is killed, hub-B comes up empty. The vault calls
+/// `bootstrap_to(hub_b)` and hub-B's in-memory state now contains
+/// the cluster + vault — *zero admin intervention*. Demonstrates
+/// the hub-as-cache property: state can be reconstructed from any
+/// vault holding the chain + persisted membership proof.
+#[tokio::test]
+async fn vault_auto_bootstraps_to_fresh_hub() {
+    let temp = tempfile::tempdir().unwrap();
+    let (hub_a, _state_a) = boot_hub().await;
+    let admin = setup_admin(temp.path(), &hub_a).await;
+    let password = "auto-pw";
+
+    run_cluster_create(&admin, password).await;
+    let token = run_vault_invite(&admin, password, "pi-1").await;
+    let vault = setup_and_accept_vault(temp.path(), "pi-1", &hub_a, &token).await;
+
+    // Sanity: enrollment now carries the membership proof.
+    let enrollment = vitonomi_vault::accept::load_enrollment(&vault.data_dir).unwrap();
+    assert!(
+        enrollment.invite_outer.is_some() && enrollment.sig_vault.is_some(),
+        "accept must persist invite_outer + sig_vault for later bootstrap"
+    );
+    let original_vault_id = enrollment.vault_id;
+
+    // Boot hub-B (separate AppState — no shared state with hub-A).
+    let (hub_b, state_b) = boot_hub().await;
+
+    // Run the auto-bootstrap directly against hub-B. http://, no
+    // SPKI fingerprint needed — `bootstrap_to` picks the plain
+    // client when the URL is http://.
+    let id = vitonomi_vault::identity::load_or_generate(&vault.data_dir).unwrap();
+    let updated = vitonomi_vault::bootstrap::bootstrap_to(&vault.data_dir, &hub_b, "", &id)
+        .await
+        .expect("auto-bootstrap to hub-B");
+
+    // The hub assigns a fresh vault_id; the vault persists it.
+    let on_disk = vitonomi_vault::accept::load_enrollment(&vault.data_dir).unwrap();
+    assert_eq!(on_disk.vault_id, updated.vault_id);
+    assert_ne!(
+        on_disk.vault_id, original_vault_id,
+        "hub-B should have minted a fresh vault_id"
+    );
+
+    // Hub-B's vault registry now contains this vault — verify by
+    // calling the trait directly through the captured AppState.
+    let pubkey = state_b
+        .control_plane
+        .get_vault_pubkey(&updated.vault_id)
+        .await
+        .expect("hub-B should know the vault now");
+    assert_eq!(pubkey.as_bytes(), id.public.as_bytes());
+
+    // Idempotent: a second bootstrap is a no-op.
+    let again = vitonomi_vault::bootstrap::bootstrap_to(&vault.data_dir, &hub_b, "", &id)
+        .await
+        .expect("idempotent re-bootstrap");
+    assert_eq!(again.vault_id, updated.vault_id);
+}
+
+/// Bootstrapping a *different* cluster against a hub already holding
+/// a cluster fails under the default `single-user` policy. Validates
+/// the operator-policy gate end-to-end through the HTTP layer.
+#[tokio::test]
+async fn single_user_policy_blocks_second_cluster_bootstrap() {
+    let temp = tempfile::tempdir().unwrap();
+    let (hub_a, _) = boot_hub().await;
+    let admin = setup_admin(temp.path(), &hub_a).await;
+    let password = "policy-pw";
+    run_cluster_create(&admin, password).await;
+    let invite = run_vault_invite(&admin, password, "pi-1").await;
+    let vault_dir_a = setup_and_accept_vault(temp.path(), "pi-1", &hub_a, &invite).await;
+
+    // Boot hub-B and bootstrap cluster A onto it (claims the slot).
+    let (hub_b, _) = boot_hub().await;
+    let id_a = vitonomi_vault::identity::load_or_generate(&vault_dir_a.data_dir).unwrap();
+    vitonomi_vault::bootstrap::bootstrap_to(&vault_dir_a.data_dir, &hub_b, "", &id_a)
+        .await
+        .expect("first cluster claims hub-B");
+
+    // Set up a SECOND admin/vault on hub-A → its own cluster.
+    let admin2_dir = temp.path().join("admin-2");
+    std::fs::create_dir_all(&admin2_dir).unwrap();
+    let admin2 = setup_admin(&admin2_dir, &hub_a).await;
+    run_cluster_create(&admin2, "pw-other").await;
+    let invite2 = run_vault_invite(&admin2, "pw-other", "pi-2").await;
+    let vault_dir_b = setup_and_accept_vault(&admin2_dir, "pi-2", &hub_a, &invite2).await;
+
+    // Try to bootstrap that *other* cluster onto hub-B — must fail.
+    let id_b = vitonomi_vault::identity::load_or_generate(&vault_dir_b.data_dir).unwrap();
+    let result =
+        vitonomi_vault::bootstrap::bootstrap_to(&vault_dir_b.data_dir, &hub_b, "", &id_b).await;
+    assert!(
+        result.is_err(),
+        "single-user policy should reject a second cluster"
+    );
+}
+
 // ─── ClusterId hex helper used in cluster_restore_to_fresh_hub ───────
 
 trait ClusterIdHex {

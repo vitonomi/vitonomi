@@ -11,6 +11,8 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{fmt, EnvFilter};
 
+use vitonomi_core::types::ClusterId;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HubConfig {
     pub server: ServerConfig,
@@ -19,6 +21,8 @@ pub struct HubConfig {
     pub tls: TlsConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub bootstrap: BootstrapConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +46,70 @@ pub struct TlsConfig {
     pub cert_pem: String,
     #[serde(default)]
     pub key_pem: String,
+}
+
+/// Vault → hub auto-bootstrap admission policy. Self-hosted default
+/// is `single-user`: the first cluster to bootstrap claims the slot.
+/// `allowlist` carries an explicit list of cluster_ids; `open`
+/// disables the gate (only safe behind an outer admission layer like
+/// a Stripe-gated reverse proxy on hosted infra).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapConfig {
+    #[serde(default = "default_bootstrap_policy")]
+    pub policy: String,
+    /// Hex-encoded cluster_ids allowed to bootstrap when
+    /// `policy = "allowlist"`. Ignored for other policies.
+    #[serde(default)]
+    pub allow_cluster_ids: Vec<String>,
+}
+
+impl Default for BootstrapConfig {
+    fn default() -> Self {
+        Self {
+            policy: default_bootstrap_policy(),
+            allow_cluster_ids: vec![],
+        }
+    }
+}
+
+fn default_bootstrap_policy() -> String {
+    "single-user".into()
+}
+
+impl BootstrapConfig {
+    /// Convert the TOML representation into the wire-level
+    /// `BootstrapPolicy` consumed by the hub control plane.
+    ///
+    /// # Errors
+    ///
+    /// Unknown policy strings or malformed cluster_id hex values.
+    pub fn to_policy(
+        &self,
+    ) -> anyhow::Result<vitonomi_core::protocol::wire::bootstrap::BootstrapPolicy> {
+        use vitonomi_core::encoding::hex_decode;
+        use vitonomi_core::protocol::wire::bootstrap::BootstrapPolicy;
+        match self.policy.as_str() {
+            "single-user" => Ok(BootstrapPolicy::SingleUser),
+            "open" => Ok(BootstrapPolicy::Open),
+            "allowlist" => {
+                let mut ids = Vec::with_capacity(self.allow_cluster_ids.len());
+                for hex_id in &self.allow_cluster_ids {
+                    let bytes = hex_decode(hex_id)
+                        .map_err(|e| anyhow!("decode cluster_id `{hex_id}`: {e}"))?;
+                    if bytes.len() != 32 {
+                        bail!("cluster_id must be 32 bytes hex, got {}", bytes.len());
+                    }
+                    let mut buf = [0u8; 32];
+                    buf.copy_from_slice(&bytes);
+                    ids.push(ClusterId(buf));
+                }
+                Ok(BootstrapPolicy::Allowlist { cluster_ids: ids })
+            }
+            other => bail!(
+                "bootstrap.policy must be `single-user`, `allowlist`, or `open`; got `{other}`"
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -166,6 +234,7 @@ fn default_config() -> HubConfig {
             level: default_level(),
             format: default_format(),
         },
+        bootstrap: BootstrapConfig::default(),
     }
 }
 

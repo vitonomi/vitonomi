@@ -21,6 +21,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/clusters/restore",
             post(crate::routes::clusters::post_restore),
         )
+        .route(
+            "/v1/clusters/bootstrap",
+            post(crate::routes::clusters::post_bootstrap),
+        )
         // Auth (Scheme A)
         .route(
             "/v1/auth/login/start",
@@ -78,7 +82,8 @@ pub async fn run(cfg: HubConfig) -> anyhow::Result<()> {
         IpAddr::from_str(&cfg.server.bind_addr).context("bad bind_addr")?,
         cfg.server.port,
     );
-    let app = router(AppState::in_memory());
+    let policy = cfg.bootstrap.to_policy().context("bootstrap policy")?;
+    let app = router(AppState::in_memory_with_policy(policy));
     let rustls_config =
         axum_server::tls_rustls::RustlsConfig::from_pem(tls.cert_pem.clone(), tls.key_pem.clone())
             .await

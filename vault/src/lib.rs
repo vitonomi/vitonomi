@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod accept;
+pub mod bootstrap;
 pub mod chain_store;
 pub mod cli;
 pub mod commands;

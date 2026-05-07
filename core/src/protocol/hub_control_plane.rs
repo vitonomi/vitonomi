@@ -19,6 +19,7 @@ use crate::protocol::wire::accept::{
     AcceptRequest, AcceptResponse, CreateInviteRequest, CreateInviteResponse,
 };
 use crate::protocol::wire::admin_chain::ChainExport;
+use crate::protocol::wire::bootstrap::{BootstrapRequest, BootstrapResponse};
 use crate::protocol::wire::login::{
     LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse, UserLookupId,
 };
@@ -93,6 +94,16 @@ pub trait HubControlPlane: Send + Sync {
         &self,
         req: ClusterRestoreRequest,
     ) -> Result<ClusterRegisterResponse, CoreError>;
+
+    /// Auto-bootstrap a cluster + vault from a vault that already
+    /// holds the chain copy + admin-signed invite outer. Idempotent:
+    /// if the cluster (and vault) is already registered, returns the
+    /// existing `vault_id` without mutating state. See
+    /// [`super::wire::bootstrap`] for the validation contract.
+    async fn bootstrap_cluster(
+        &self,
+        req: BootstrapRequest,
+    ) -> Result<BootstrapResponse, CoreError>;
 
     /// Begin a login flow.
     async fn login_start(&self, req: LoginStartRequest) -> Result<LoginStartResponse, CoreError>;

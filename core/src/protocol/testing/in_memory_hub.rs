@@ -25,8 +25,10 @@ use crate::protocol::hub_control_plane::{
     VaultRecord, VaultStatus,
 };
 use crate::protocol::wire::accept::{
-    AcceptRequest, AcceptResponse, CreateInviteRequest, CreateInviteResponse,
+    invite_outer_signed_bytes, AcceptRequest, AcceptResponse, CreateInviteRequest,
+    CreateInviteResponse,
 };
+use crate::protocol::wire::bootstrap::{BootstrapPolicy, BootstrapRequest, BootstrapResponse};
 use crate::protocol::wire::login::{
     LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse,
 };
@@ -73,6 +75,7 @@ struct PendingChallenge {
 pub struct InMemoryHubControlPlane {
     state: Mutex<HubState>,
     clock_ms: fn() -> u64,
+    bootstrap_policy: BootstrapPolicy,
 }
 
 impl InMemoryHubControlPlane {
@@ -81,6 +84,7 @@ impl InMemoryHubControlPlane {
         Self {
             state: Mutex::new(HubState::default()),
             clock_ms: default_clock_ms,
+            bootstrap_policy: BootstrapPolicy::default(),
         }
     }
 
@@ -89,7 +93,16 @@ impl InMemoryHubControlPlane {
         Self {
             state: Mutex::new(HubState::default()),
             clock_ms,
+            bootstrap_policy: BootstrapPolicy::default(),
         }
+    }
+
+    /// Override the operator's bootstrap admission policy. Default is
+    /// [`BootstrapPolicy::SingleUser`].
+    #[must_use]
+    pub fn with_bootstrap_policy(mut self, policy: BootstrapPolicy) -> Self {
+        self.bootstrap_policy = policy;
+        self
     }
 
     fn now(&self) -> u64 {
@@ -255,6 +268,134 @@ impl HubControlPlane for InMemoryHubControlPlane {
         })
     }
 
+    async fn bootstrap_cluster(
+        &self,
+        req: BootstrapRequest,
+    ) -> Result<BootstrapResponse, CoreError> {
+        // 1. Cluster identity is bound to the admin pubkey.
+        let cluster_id = cluster_id_of(&req.cluster_admin_pubkey, FormatVersion::V1);
+
+        // 2. Chain integrity (outer-only — no cluster_shared_key).
+        if req.chain_export.is_empty() {
+            return Err(CoreError::Crypto(CryptoError::AdminChain(
+                "bootstrap chain_export is empty".into(),
+            )));
+        }
+        crate::crypto::admin_chain::verify_chain_outer_only(
+            &req.cluster_admin_pubkey,
+            cluster_id,
+            &req.chain_export,
+        )?;
+        // Genesis sanity (verify_chain_outer_only checks linkage but
+        // not seq/prev_hash on the head).
+        let genesis = &req.chain_export[0];
+        if genesis.seq != 0 || genesis.prev_hash != GENESIS_PREV_HASH {
+            return Err(CoreError::Crypto(CryptoError::AdminChain(
+                "genesis seq / prev_hash invalid".into(),
+            )));
+        }
+
+        // 3. Admin signature on the membership-bearing invite outer.
+        let body_bytes = invite_outer_signed_bytes(&req.invite_outer);
+        crate::crypto::pq::ml_dsa_65_verify(
+            &req.cluster_admin_pubkey,
+            &req.invite_outer.sig_admin_outer,
+            &body_bytes,
+        )?;
+        if req.invite_outer.cluster_id != cluster_id {
+            return Err(CoreError::Crypto(CryptoError::AdminChain(
+                "invite cluster_id != bootstrap cluster_id".into(),
+            )));
+        }
+
+        // 4. Vault sig over (invite_nonce || vault_pubkey_bytes).
+        let mut signed = Vec::with_capacity(
+            req.invite_outer.invite_nonce.len() + req.vault_pubkey.as_bytes().len(),
+        );
+        signed.extend_from_slice(&req.invite_outer.invite_nonce);
+        signed.extend_from_slice(req.vault_pubkey.as_bytes());
+        crate::crypto::pq::ml_dsa_65_verify(&req.vault_pubkey, &req.sig_vault, &signed)?;
+
+        // 5. Operator policy gate. Single-user mode rejects any
+        //    *other* cluster_id but allows idempotent re-bootstrap of
+        //    the already-registered cluster.
+        let mut state = self.state.lock().expect("poisoned");
+        match &self.bootstrap_policy {
+            BootstrapPolicy::SingleUser => {
+                if let Some((existing_id, _)) = state.clusters.iter().next() {
+                    if *existing_id != cluster_id {
+                        return Err(CoreError::Auth(AuthError::Forbidden));
+                    }
+                }
+            }
+            BootstrapPolicy::Allowlist { cluster_ids } => {
+                if !cluster_ids.iter().any(|c| *c == cluster_id) {
+                    return Err(CoreError::Auth(AuthError::Forbidden));
+                }
+            }
+            BootstrapPolicy::Open => {}
+        }
+
+        // 6. Idempotent register. Cluster + chain are created if
+        //    absent; vault is registered if absent.
+        let created_cluster = !state.clusters.contains_key(&cluster_id);
+        if created_cluster {
+            state.clusters.insert(
+                cluster_id,
+                ClusterRecord {
+                    admin_pubkey: req.cluster_admin_pubkey.clone(),
+                    chain: req.chain_export.clone(),
+                    vaults: vec![],
+                },
+            );
+        } else {
+            // Refuse if the existing cluster is registered under a
+            // different admin pubkey — protects against cluster_id
+            // collisions (which would imply pubkey reuse, but
+            // defense-in-depth).
+            let existing = state
+                .clusters
+                .get(&cluster_id)
+                .expect("contains_key just checked");
+            if existing.admin_pubkey != req.cluster_admin_pubkey {
+                return Err(CoreError::Auth(AuthError::Forbidden));
+            }
+        }
+
+        let cluster = state
+            .clusters
+            .get_mut(&cluster_id)
+            .expect("just inserted or already present");
+        let existing_vault_id = cluster
+            .vaults
+            .iter()
+            .find(|v| v.vault_pubkey == req.vault_pubkey)
+            .map(|v| v.vault_id);
+        let (vault_id, created_vault) = match existing_vault_id {
+            Some(id) => (id, false),
+            None => {
+                let mut buf = [0u8; 16];
+                buf.copy_from_slice(&random_bytes(16).expect("rng"));
+                let vault_id = VaultId(buf);
+                cluster.vaults.push(VaultRecord {
+                    vault_id,
+                    vault_pubkey: req.vault_pubkey.clone(),
+                    last_seen_ms: None,
+                    status: VaultStatus::Online,
+                    sealed_meta: vec![],
+                });
+                (vault_id, true)
+            }
+        };
+
+        Ok(BootstrapResponse {
+            cluster_id,
+            vault_id,
+            created_cluster,
+            created_vault,
+        })
+    }
+
     async fn login_start(&self, req: LoginStartRequest) -> Result<LoginStartResponse, CoreError> {
         let mut state = self.state.lock().expect("poisoned");
         let snapshot = {
@@ -378,7 +519,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
             .admin_pubkey
             .clone();
         // Verify outer signature against the cluster admin pubkey.
-        let body_bytes = invite_outer_signed_bytes(&req.invite)?;
+        let body_bytes = invite_outer_signed_bytes(&req.invite);
         crate::crypto::pq::ml_dsa_65_verify(
             &admin_pubkey,
             &req.invite.sig_admin_outer,
@@ -436,7 +577,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
         };
 
         // 5. Re-verify admin signature on the outer summary.
-        let body_bytes = invite_outer_signed_bytes(&req.invite_outer)?;
+        let body_bytes = invite_outer_signed_bytes(&req.invite_outer);
         crate::crypto::pq::ml_dsa_65_verify(
             &admin_pubkey,
             &req.invite_outer.sig_admin_outer,
@@ -599,23 +740,4 @@ impl HubControlPlane for InMemoryHubControlPlane {
 struct UserSnapshot {
     user_id: UserId,
     encrypted_key_blob: Vec<u8>,
-}
-
-/// Compute the bytes that the cluster admin signs as
-/// `sig_admin_outer` over an `InviteOuterSummary`. Must mirror what
-/// the admin's CLI computes when generating the invite.
-fn invite_outer_signed_bytes(
-    outer: &crate::protocol::wire::accept::InviteOuterSummary,
-) -> Result<Vec<u8>, CoreError> {
-    use sha2::Digest;
-    // Stable, simple binary layout: format_version || cluster_id ||
-    // invite_nonce || expires_at_ms_be8 || inner_payload_hash.
-    let _ = sha2::Sha256::new(); // ensure import is used
-    let mut out = Vec::new();
-    out.push(outer.format_version.as_u8());
-    out.extend_from_slice(outer.cluster_id.as_bytes());
-    out.extend_from_slice(&outer.invite_nonce);
-    out.extend_from_slice(&outer.expires_at_ms.to_be_bytes());
-    out.extend_from_slice(&outer.inner_payload_hash);
-    Ok(out)
 }

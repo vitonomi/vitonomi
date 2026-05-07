@@ -35,8 +35,18 @@ pub async fn run(cfg: VaultConfig) -> anyhow::Result<()> {
         ));
     }
     let id = identity::load_or_generate(&cfg.paths.data_dir)?;
-    let enrollment = load_enrollment(&cfg.paths.data_dir)
+    let mut enrollment = load_enrollment(&cfg.paths.data_dir)
         .context("load enrollment.json (have you run `accept` yet?)")?;
+
+    // Best-effort auto-bootstrap. Re-creates the cluster + vault
+    // record on a hub that has lost its state (typical after an
+    // InMemoryHub reboot). Idempotent: a no-op if already registered.
+    // Failure here is non-fatal — we still try the WS handshake; if
+    // the hub is intact, it'll succeed.
+    if let Err(e) = crate::bootstrap::bootstrap_with(&cfg, &id, &mut enrollment).await {
+        tracing::warn!(error = %e, "auto-bootstrap skipped");
+    }
+
     let store = Arc::new(ChainStore::open(&cfg.paths.data_dir)?);
 
     let mut backoff = hub_client::RECONNECT_BACKOFF_MIN;

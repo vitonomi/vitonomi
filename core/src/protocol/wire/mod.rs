@@ -3,5 +3,6 @@
 
 pub mod accept;
 pub mod admin_chain;
+pub mod bootstrap;
 pub mod login;
 pub mod vault_bus;
