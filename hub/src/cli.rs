@@ -58,6 +58,15 @@ pub enum Command {
         #[arg(long)]
         single_user: bool,
     },
+    /// Print the hub's TLS leaf cert SPKI fingerprint to stdout.
+    /// Generates the dev cert if one isn't yet present (matching
+    /// what `start` would do). Use this value as the `--fingerprint`
+    /// argument to `vitonomi-cli vault invite`.
+    Fingerprint {
+        /// Override the configured data dir (where dev cert lives).
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
 }
 
 /// Entrypoint called by `main.rs`.
@@ -110,6 +119,18 @@ pub async fn run_cli() -> anyhow::Result<()> {
                 "vitonomi-hub starting",
             );
             crate::server::run(cfg).await
+        }
+        Command::Fingerprint { data_dir } => {
+            let cfg = HubConfig::load(
+                args.config.as_deref(),
+                crate::config::CliOverrides {
+                    data_dir,
+                    ..Default::default()
+                },
+            )?;
+            let tls = crate::tls::resolve(&cfg).context("resolve TLS material")?;
+            println!("{}", tls.spki_fingerprint);
+            Ok(())
         }
     }
 }
