@@ -75,6 +75,14 @@ pub fn router(state: AppState) -> Router {
 ///
 /// Surfaces TLS-material resolution, listener-bind, and runtime errors.
 pub async fn run(cfg: HubConfig) -> anyhow::Result<()> {
+    // Install rustls' process-wide CryptoProvider before any TLS work
+    // happens. axum-server's `RustlsConfig::from_pem` builds its own
+    // ServerConfig internally and assumes a provider is already
+    // installed; without this the first incoming handshake panics
+    // with "Could not automatically determine the process-level
+    // CryptoProvider". Idempotent — safe to call repeatedly.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let tls = crate::tls::resolve(&cfg).context("resolve TLS material")?;
     tracing::info!(spki = %tls.spki_fingerprint, "TLS material loaded");
 
