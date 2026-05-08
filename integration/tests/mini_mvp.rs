@@ -454,6 +454,94 @@ async fn hub_state_does_not_retain_raw_session_tokens() {
     );
 }
 
+/// After `accept`, the vault MUST hold a `cluster_shared_key` byte-
+/// equal to the admin's. This locks in the K2 unseal path
+/// end-to-end: admin generates `invite_kek_secret`, derives a KEK,
+/// seals `cluster_shared_key`; vault re-derives the KEK and opens
+/// the seal. If the admin's and vault's keys diverge, every Phase 1+
+/// record write/read silently breaks.
+#[tokio::test]
+async fn vault_holds_cluster_shared_key_after_accept() {
+    use sha2::Digest as _;
+    let temp = tempfile::tempdir().unwrap();
+    let (hub_url, _) = boot_hub().await;
+    let admin = setup_admin(temp.path(), &hub_url).await;
+    let password = "csk-pw";
+    run_cluster_create(&admin, password).await;
+    let token = run_vault_invite(&admin, password, "pi-1").await;
+    let vault = setup_and_accept_vault(temp.path(), "pi-1", &hub_url, &token).await;
+
+    // Vault now persists cluster_shared_key.bin after accept.
+    let vault_csk = vitonomi_vault::cluster_key::load(&vault.data_dir)
+        .expect("vault should hold cluster_shared_key after accept");
+    assert_eq!(vault_csk.as_bytes().len(), 32);
+
+    // Admin's cluster_shared_key (recovered from the encrypted key
+    // blob in cli state) must match byte-for-byte.
+    let st = cli_state::load(&admin.cli_state_path).unwrap();
+    let secrets = vitonomi_core::crypto::keyblob::decrypt_with_password(
+        password.as_bytes(),
+        &st.encrypted_key_blob,
+    )
+    .expect("decrypt admin key blob");
+    assert_eq!(
+        sha2::Sha256::digest(vault_csk.as_bytes()).as_slice(),
+        sha2::Sha256::digest(secrets.cluster_shared_key.as_bytes()).as_slice(),
+        "admin and vault MUST hold identical cluster_shared_key after K2",
+    );
+}
+
+/// A tampered `sealed_cluster_key` in the invite makes `accept`
+/// fail. Without this guard, a mis-typed / corrupted invite could
+/// silently write a vault that holds a wrong cluster_shared_key,
+/// which would only surface much later as record-decrypt failures.
+#[tokio::test]
+async fn tampered_sealed_cluster_key_rejected_at_accept() {
+    let temp = tempfile::tempdir().unwrap();
+    let (hub_url, _) = boot_hub().await;
+    let admin = setup_admin(temp.path(), &hub_url).await;
+    let password = "tamper-pw";
+    run_cluster_create(&admin, password).await;
+    let token = run_vault_invite(&admin, password, "pi-1").await;
+
+    // Decode the combined invite, flip a byte in sealed_cluster_key,
+    // re-encode. Note: this also invalidates inner_payload_hash, so
+    // accept will fail at sanity_check_invite — the test still proves
+    // the vault won't accept a corrupted invite. The
+    // `unseal_cluster_shared_key` standalone test (in core) covers the
+    // path where only the seal is corrupted.
+    let mut combined = vitonomi_vault::accept::CombinedInvite::parse(&token).unwrap();
+    let last = combined.inner.sealed_cluster_key.len() - 1;
+    combined.inner.sealed_cluster_key[last] ^= 0x01;
+    let bad_token = combined.encode().unwrap();
+
+    let cfg_path = temp.path().join("pi-1-bad.toml");
+    let data_dir = temp.path().join("pi-1-bad-data");
+    vitonomi_vault::config::write_default_config(
+        Some(&cfg_path),
+        vitonomi_vault::config::InitOverrides {
+            data_dir: Some(data_dir.clone()),
+            hub_url: Some(hub_url),
+        },
+        true,
+    )
+    .unwrap();
+    let mut cfg = VaultConfig::load(
+        Some(&cfg_path),
+        vitonomi_vault::config::CliOverrides::default(),
+    )
+    .unwrap();
+    let result = vitonomi_vault::accept::run(&cfg_path, &mut cfg, &bad_token).await;
+    assert!(
+        result.is_err(),
+        "accept must reject an invite with tampered sealed_cluster_key"
+    );
+    assert!(
+        !vitonomi_vault::cluster_key::exists(&data_dir),
+        "no cluster_shared_key.bin should be written when accept fails"
+    );
+}
+
 /// Vault → hub auto-bootstrap: hub-A registers a cluster + accepts
 /// a vault, hub-A is killed, hub-B comes up empty. The vault calls
 /// `bootstrap_to(hub_b)` and hub-B's in-memory state now contains

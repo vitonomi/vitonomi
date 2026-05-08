@@ -37,6 +37,15 @@ pub fn admin_chain_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("admin-chain")
 }
 
+/// `<data_dir>/cluster_shared_key.bin` — the AEAD key used to seal
+/// chain inner payloads, vault names, and (Phase 1+) records. Written
+/// during `accept` after the vault opens the invite's
+/// `sealed_cluster_key`.
+#[must_use]
+pub fn cluster_shared_key_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("cluster_shared_key.bin")
+}
+
 /// Create the data directory if missing, enforcing 0700 on it and
 /// 0600 on every file underneath.
 ///

@@ -13,6 +13,9 @@ use std::path::Path;
 use anyhow::{anyhow, Context as _};
 use sha2::{Digest, Sha256};
 
+use vitonomi_core::crypto::aead::open as aead_open;
+use vitonomi_core::crypto::cluster_keys::ClusterSharedKey;
+use vitonomi_core::crypto::invite_kek::{InviteKek, SEALED_CLUSTER_KEY_AAD};
 use vitonomi_core::crypto::pq::ml_dsa_65_sign;
 use vitonomi_core::encoding::{b64url_decode, cbor_from_slice, cbor_to_vec};
 use vitonomi_core::protocol::wire::accept::{
@@ -102,7 +105,16 @@ pub async fn run(
     cfg.write_to(config_path)
         .with_context(|| format!("rewrite {}", config_path.display()))?;
 
-    // 5. Persist enrollment + chain head locally. The membership
+    // 5. Open the K2 seal: derive KEK from invite_kek_secret +
+    //    invite_nonce, AEAD-open sealed_cluster_key, persist
+    //    cluster_shared_key locally for chain inner unseal + record
+    //    sealing in Phase 1+.
+    let cluster_shared_key = unseal_cluster_shared_key(&combined.outer, &combined.inner)
+        .context("open sealed_cluster_key from invite (K2)")?;
+    crate::cluster_key::store(&cfg.paths.data_dir, &cluster_shared_key)
+        .context("persist cluster_shared_key.bin")?;
+
+    // 6. Persist enrollment + chain head locally. The membership
     //    proof (invite_outer + sig_vault) is captured here so a
     //    later auto-bootstrap against a fresh hub can re-present it.
     persist_enrollment(&cfg.paths.data_dir, &resp, &combined.outer, &sig_vault)?;
@@ -114,6 +126,36 @@ pub async fn run(
     )?;
 
     Ok(resp)
+}
+
+/// Open the K2 seal in an invite. Pure function — used by the
+/// `accept` flow above and exposed for tests / future replay paths.
+///
+/// # Errors
+///
+/// `CryptoError::KeyLength` from KEK derivation if the secret is
+/// malformed; AEAD open failure if the seal was tampered with or if
+/// the secret/nonce don't match what the admin used at issue time.
+pub fn unseal_cluster_shared_key(
+    outer: &InviteOuterSummary,
+    inner: &InviteInnerPayload,
+) -> anyhow::Result<ClusterSharedKey> {
+    let kek = InviteKek::derive(&inner.invite_kek_secret, &outer.invite_nonce)
+        .map_err(|e| anyhow!("derive invite KEK: {e}"))?;
+    let csk_bytes = aead_open(
+        &kek.to_aead_key(),
+        &inner.sealed_cluster_key,
+        SEALED_CLUSTER_KEY_AAD,
+    )
+    .map_err(|e| anyhow!("AEAD-open sealed_cluster_key: {e}"))?;
+    if csk_bytes.len() != ClusterSharedKey::LEN {
+        return Err(anyhow!(
+            "unsealed cluster_shared_key has wrong length: {} (expected {})",
+            csk_bytes.len(),
+            ClusterSharedKey::LEN
+        ));
+    }
+    Ok(ClusterSharedKey(csk_bytes))
 }
 
 fn sanity_check_invite(c: &CombinedInvite, cfg: &VaultConfig) -> anyhow::Result<()> {

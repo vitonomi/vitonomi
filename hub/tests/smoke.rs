@@ -139,12 +139,15 @@ async fn full_register_login_invite_accept_ws_round_trip() {
         .unwrap();
 
     // 4. Build + register an invite (admin signs outer locally).
+    //    The hub never unseals the inner; placeholder secret + ciphertext
+    //    are fine here.
     let invite_nonce = vec![0xcc; 32];
     let inner = InviteInnerPayload {
         format_version: FormatVersion::V1,
         vault_role: VaultRole::Storage,
         hub_url: base.clone(),
         hub_cert_fingerprint: "sha256:test-fingerprint-string-of-43-base64url-chars-x".into(),
+        invite_kek_secret: vitonomi_core::crypto::invite_kek::InviteKekSecret(vec![0u8; 32]),
         sealed_cluster_key: vec![0u8; 72],
     };
     let inner_bytes = cbor_to_vec(&inner).unwrap();

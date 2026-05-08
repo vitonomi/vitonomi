@@ -150,14 +150,27 @@ async fn vault_init_accept_persists_state_correctly() {
         .await
         .unwrap();
 
-    // Build the invite (outer + inner).
+    // Build the invite (outer + inner). vault::accept::run will
+    // unseal `sealed_cluster_key` via the per-invite KEK, so the
+    // seal must be real.
     let invite_nonce = vec![0xcc; 32];
+    let invite_kek_secret = vitonomi_core::crypto::invite_kek::InviteKekSecret::generate().unwrap();
+    let kek =
+        vitonomi_core::crypto::invite_kek::InviteKek::derive(&invite_kek_secret, &invite_nonce)
+            .unwrap();
+    let sealed_cluster_key = vitonomi_core::crypto::aead::seal(
+        &kek.to_aead_key(),
+        g.cluster_shared_key.as_bytes(),
+        vitonomi_core::crypto::invite_kek::SEALED_CLUSTER_KEY_AAD,
+    )
+    .unwrap();
     let inner = InviteInnerPayload {
         format_version: FormatVersion::V1,
         vault_role: VaultRole::Storage,
         hub_url: hub_url.clone(),
         hub_cert_fingerprint: "sha256:test-fingerprint-string-of-43-base64url-chars-x".into(),
-        sealed_cluster_key: vec![0u8; 72],
+        invite_kek_secret,
+        sealed_cluster_key,
     };
     let outer = build_invite_outer(
         cluster_id,

@@ -14,6 +14,7 @@ pub mod accept;
 pub mod bootstrap;
 pub mod chain_store;
 pub mod cli;
+pub mod cluster_key;
 pub mod commands;
 pub mod config;
 pub mod hub_client;

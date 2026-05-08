@@ -75,11 +75,15 @@ async fn register_invite_accept_round_trip() {
     // test — the in-memory hub never opens the inner; only the
     // inner_payload_hash matters).
     let invite_nonce = vec![0xcc; 32];
+    // The in-memory hub never unseals the inner — only the
+    // inner_payload_hash matters here. Placeholder secret + sealed
+    // bytes are fine; no AEAD is invoked on this code path.
     let inner = InviteInnerPayload {
         format_version: FormatVersion::V1,
         vault_role: VaultRole::Storage,
         hub_url: "https://localhost:0".into(),
         hub_cert_fingerprint: "sha256:test-fingerprint-string-of-43-base64url-chars-x".into(),
+        invite_kek_secret: vitonomi_core::crypto::invite_kek::InviteKekSecret(vec![0u8; 32]),
         sealed_cluster_key: vec![0u8; 72],
     };
     let inner_bytes = cbor_to_vec(&inner).unwrap();

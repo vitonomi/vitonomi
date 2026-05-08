@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use vitonomi_core::crypto::aead::{seal, AeadKey};
 use vitonomi_core::crypto::cluster_keys::{ClusterPepper, ClusterSharedKey};
-use vitonomi_core::crypto::invite_kek::InviteKek;
+use vitonomi_core::crypto::invite_kek::{InviteKek, InviteKekSecret, SEALED_CLUSTER_KEY_AAD};
 use vitonomi_core::crypto::keyblob::decrypt_with_password;
 use vitonomi_core::crypto::pq::{ml_dsa_65_sign, MlDsa65SecretKey};
 use vitonomi_core::crypto::random::random_bytes;
@@ -68,19 +68,29 @@ pub async fn run<P: Prompts + ?Sized>(
         .unwrap_or(0);
     let expires_at_ms = now_ms.saturating_add(args.ttl_secs.saturating_mul(1000));
 
-    // Build the inner payload + seal cluster_shared_key under invite_kek.
-    let invite_kek = InviteKek::derive(&admin_sk, &invite_nonce)
+    // Build the inner payload + seal cluster_shared_key under a per-
+    // invite KEK. The KEK is derived from a fresh symmetric secret +
+    // the invite_nonce; the secret itself ships inside this same
+    // inner payload so the vault — which never sees admin_sk — can
+    // re-derive the KEK.
+    let invite_kek_secret =
+        InviteKekSecret::generate().map_err(|e| anyhow!("rng for invite kek secret: {e}"))?;
+    let invite_kek = InviteKek::derive(&invite_kek_secret, &invite_nonce)
         .map_err(|e| anyhow!("derive invite KEK: {e}"))?;
     let kek_aead: AeadKey = invite_kek.to_aead_key();
-    let aad = b"vitonomi/invite_kek/v1";
-    let sealed_cluster_key = seal(&kek_aead, cluster_shared_key.as_bytes(), aad)
-        .map_err(|e| anyhow!("seal cluster_shared_key: {e}"))?;
+    let sealed_cluster_key = seal(
+        &kek_aead,
+        cluster_shared_key.as_bytes(),
+        SEALED_CLUSTER_KEY_AAD,
+    )
+    .map_err(|e| anyhow!("seal cluster_shared_key: {e}"))?;
 
     let inner = InviteInnerPayload {
         format_version: FormatVersion::V1,
         vault_role: VaultRole::Storage,
         hub_url: cfg.hub.url.clone(),
         hub_cert_fingerprint: args.hub_cert_fingerprint.clone(),
+        invite_kek_secret,
         sealed_cluster_key,
     };
 
