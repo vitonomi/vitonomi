@@ -1,12 +1,11 @@
-//! Vault `accept` flow: parse the invite token, verify the inner-
-//! payload hash matches the outer summary the admin signed, validate
-//! that the invite's `hub_url` matches `config.hub.url`, post to the
-//! hub, persist the admin-attested `cert_fingerprint` into
-//! `vault.toml`, fetch the chain, persist locally.
-//!
-//! This is the K2 step where the cluster-shared-key arrives from the
-//! admin out-of-band (sealed inside the inner payload) — the hub
-//! never sees the inner payload at all.
+//! Vault `accept` flow: parse the operator-channel short invite
+//! token, recompute `sha256(inner)` against the token's
+//! `inner_payload_hash` to catch tampering, validate the invite's
+//! `hub_url` matches `config.hub.url`, post `(cluster_id, invite_nonce,
+//! inner, vault_pubkey, sig_vault)` to the hub (the hub already holds
+//! the admin-signed outer from `create_invite`), persist the admin-
+//! attested `cert_fingerprint` into `vault.toml`, open the K2 seal,
+//! persist locally.
 
 use std::path::Path;
 
@@ -17,46 +16,15 @@ use vitonomi_core::crypto::aead::open as aead_open;
 use vitonomi_core::crypto::cluster_keys::ClusterSharedKey;
 use vitonomi_core::crypto::invite_kek::{InviteKek, SEALED_CLUSTER_KEY_AAD};
 use vitonomi_core::crypto::pq::ml_dsa_65_sign;
-use vitonomi_core::encoding::{b64url_decode, cbor_from_slice, cbor_to_vec};
+use vitonomi_core::encoding::cbor_to_vec;
 use vitonomi_core::protocol::wire::accept::{
-    AcceptRequest, AcceptResponse, InviteInnerPayload, InviteOuterSummary,
+    parse_short_token, AcceptRequest, AcceptResponse, InviteInnerPayload, ShortInviteToken,
 };
 
 use crate::chain_store::ChainStore;
 use crate::config::VaultConfig;
 use crate::hub_client;
 use crate::state_dir;
-
-/// Combined invite as the operator pastes it: outer summary + inner
-/// payload, base64url-encoded then CBOR-decoded.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CombinedInvite {
-    pub outer: InviteOuterSummary,
-    pub inner: InviteInnerPayload,
-}
-
-impl CombinedInvite {
-    /// Parse from the base64url-encoded CBOR string emitted by the
-    /// admin CLI's `vault invite` subcommand.
-    ///
-    /// # Errors
-    ///
-    /// Decode failures.
-    pub fn parse(token: &str) -> anyhow::Result<Self> {
-        let bytes = b64url_decode(token.trim()).map_err(|e| anyhow!("decode invite token: {e}"))?;
-        cbor_from_slice(&bytes).map_err(|e| anyhow!("decode CBOR invite: {e}"))
-    }
-
-    /// Encode as the base64url CBOR string the admin CLI emits.
-    ///
-    /// # Errors
-    ///
-    /// Encode failures.
-    pub fn encode(&self) -> anyhow::Result<String> {
-        let bytes = cbor_to_vec(self).map_err(|e| anyhow!("encode CBOR invite: {e}"))?;
-        Ok(vitonomi_core::encoding::b64url_encode(&bytes))
-    }
-}
 
 /// Run the `accept` subcommand. Mutates `cfg` (in-memory) and
 /// persists it back to `config_path`.
@@ -69,14 +37,14 @@ pub async fn run(
     cfg: &mut VaultConfig,
     invite_token: &str,
 ) -> anyhow::Result<AcceptResponse> {
-    let combined = CombinedInvite::parse(invite_token)?;
-    sanity_check_invite(&combined, cfg)?;
+    let token = parse_short_token(invite_token).map_err(|e| anyhow!("parse invite token: {e}"))?;
+    sanity_check_token(&token, cfg)?;
 
     // 1. Generate / load the vault keypair before posting.
     let id = crate::identity::load_or_generate(&cfg.paths.data_dir)?;
 
     // 2. Sign the accept message: invite_nonce || vault_pubkey_bytes.
-    let mut signed = combined.outer.invite_nonce.clone();
+    let mut signed = token.invite_nonce.clone();
     signed.extend_from_slice(id.public.as_bytes());
     let sig_vault =
         ml_dsa_65_sign(&id.secret, &signed).map_err(|e| anyhow!("vault accept signature: {e}"))?;
@@ -90,8 +58,9 @@ pub async fn run(
     let client = unpinned_http_client()?;
 
     let req = AcceptRequest {
-        invite_outer: combined.outer.clone(),
-        invite_inner: combined.inner.clone(),
+        cluster_id: token.cluster_id,
+        invite_nonce: token.invite_nonce.clone(),
+        invite_inner: token.inner.clone(),
         vault_pubkey: id.public.clone(),
         sig_vault: sig_vault.clone(),
     };
@@ -101,7 +70,7 @@ pub async fn run(
         .context("POST /v1/vaults/accept")?;
 
     // 4. Persist the admin-attested cert_fingerprint into vault.toml.
-    cfg.hub.cert_fingerprint = combined.inner.hub_cert_fingerprint.clone();
+    cfg.hub.cert_fingerprint = token.inner.hub_cert_fingerprint.clone();
     cfg.write_to(config_path)
         .with_context(|| format!("rewrite {}", config_path.display()))?;
 
@@ -109,15 +78,16 @@ pub async fn run(
     //    invite_nonce, AEAD-open sealed_cluster_key, persist
     //    cluster_shared_key locally for chain inner unseal + record
     //    sealing in Phase 1+.
-    let cluster_shared_key = unseal_cluster_shared_key(&combined.outer, &combined.inner)
+    let cluster_shared_key = unseal_cluster_shared_key(&token.invite_nonce, &token.inner)
         .context("open sealed_cluster_key from invite (K2)")?;
     crate::cluster_key::store(&cfg.paths.data_dir, &cluster_shared_key)
         .context("persist cluster_shared_key.bin")?;
 
     // 6. Persist enrollment + chain head locally. The membership
-    //    proof (invite_outer + sig_vault) is captured here so a
-    //    later auto-bootstrap against a fresh hub can re-present it.
-    persist_enrollment(&cfg.paths.data_dir, &resp, &combined.outer, &sig_vault)?;
+    //    proof (invite_outer echoed by hub + sig_vault) is captured
+    //    here so a later auto-bootstrap against a fresh hub can
+    //    re-present it.
+    persist_enrollment(&cfg.paths.data_dir, &resp, &resp.invite_outer, &sig_vault)?;
     let store = ChainStore::open(&cfg.paths.data_dir)?;
     store.replace_all(
         &resp.cluster_admin_pubkey,
@@ -137,10 +107,10 @@ pub async fn run(
 /// malformed; AEAD open failure if the seal was tampered with or if
 /// the secret/nonce don't match what the admin used at issue time.
 pub fn unseal_cluster_shared_key(
-    outer: &InviteOuterSummary,
+    invite_nonce: &[u8],
     inner: &InviteInnerPayload,
 ) -> anyhow::Result<ClusterSharedKey> {
-    let kek = InviteKek::derive(&inner.invite_kek_secret, &outer.invite_nonce)
+    let kek = InviteKek::derive(&inner.invite_kek_secret, invite_nonce)
         .map_err(|e| anyhow!("derive invite KEK: {e}"))?;
     let csk_bytes = aead_open(
         &kek.to_aead_key(),
@@ -158,27 +128,27 @@ pub fn unseal_cluster_shared_key(
     Ok(ClusterSharedKey(csk_bytes))
 }
 
-fn sanity_check_invite(c: &CombinedInvite, cfg: &VaultConfig) -> anyhow::Result<()> {
+fn sanity_check_token(t: &ShortInviteToken, cfg: &VaultConfig) -> anyhow::Result<()> {
     if cfg.hub.url.is_empty() {
         return Err(anyhow!(
             "vault.toml has no hub.url — run `vitonomi-vault init --hub <url>` first"
         ));
     }
-    if c.inner.hub_url.trim_end_matches('/') != cfg.hub.url.trim_end_matches('/') {
+    if t.inner.hub_url.trim_end_matches('/') != cfg.hub.url.trim_end_matches('/') {
         return Err(anyhow!(
             "invite says hub_url={}, but vault.toml says hub.url={} — refuse",
-            c.inner.hub_url,
+            t.inner.hub_url,
             cfg.hub.url
         ));
     }
     let inner_bytes =
-        cbor_to_vec(&c.inner).map_err(|e| anyhow!("CBOR-encode inner for hash check: {e}"))?;
+        cbor_to_vec(&t.inner).map_err(|e| anyhow!("CBOR-encode inner for hash check: {e}"))?;
     let mut h = Sha256::new();
     h.update(&inner_bytes);
     let actual = h.finalize();
-    if actual.as_slice() != c.outer.inner_payload_hash.as_slice() {
+    if actual.as_slice() != t.inner_payload_hash.as_slice() {
         return Err(anyhow!(
-            "invite outer.inner_payload_hash does not match sha256(inner) — token tampered"
+            "invite inner_payload_hash does not match sha256(inner) — token tampered"
         ));
     }
     Ok(())

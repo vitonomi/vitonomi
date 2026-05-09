@@ -199,7 +199,8 @@ async fn full_register_login_invite_accept_ws_round_trip() {
     let accept: AcceptResponse = client
         .post(format!("{base}/v1/vaults/accept"))
         .json(&AcceptRequest {
-            invite_outer: outer,
+            cluster_id,
+            invite_nonce: outer.invite_nonce.clone(),
             invite_inner: inner,
             vault_pubkey: vault_kp.public.clone(),
             sig_vault,

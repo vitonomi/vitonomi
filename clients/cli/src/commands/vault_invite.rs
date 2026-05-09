@@ -17,9 +17,10 @@ use vitonomi_core::crypto::invite_kek::{InviteKek, InviteKekSecret, SEALED_CLUST
 use vitonomi_core::crypto::keyblob::decrypt_with_password;
 use vitonomi_core::crypto::pq::{ml_dsa_65_sign, MlDsa65SecretKey};
 use vitonomi_core::crypto::random::random_bytes;
-use vitonomi_core::encoding::{b64url_encode, cbor_to_vec};
+use vitonomi_core::encoding::cbor_to_vec;
 use vitonomi_core::protocol::wire::accept::{
-    CreateInviteRequest, InviteInnerPayload, InviteOuterSummary, VaultRole,
+    encode_short_token, CreateInviteRequest, InviteInnerPayload, InviteOuterSummary,
+    ShortInviteToken, VaultRole,
 };
 use vitonomi_core::types::FormatVersion;
 
@@ -129,10 +130,18 @@ pub async fn run<P: Prompts + ?Sized>(
     .await
     .context("POST /v1/vaults/invites")?;
 
-    // Emit the combined invite token for operator transport.
-    let combined = CombinedInvite { outer, inner };
-    let combined_bytes = cbor_to_vec(&combined).map_err(|e| anyhow!("CBOR(combined): {e}"))?;
-    let token_str = b64url_encode(&combined_bytes);
+    // Build + emit the short operator-channel token. The hub already
+    // holds the full `outer` (POST'd above), so the token only needs
+    // the small bag of locators + the genuinely-confidential `inner`.
+    let token = ShortInviteToken {
+        format_version: FormatVersion::V1,
+        cluster_id: st.cluster_id,
+        invite_nonce: outer.invite_nonce.clone(),
+        expires_at_ms: outer.expires_at_ms,
+        inner_payload_hash: outer.inner_payload_hash.clone(),
+        inner,
+    };
+    let token_str = encode_short_token(&token).map_err(|e| anyhow!("encode token: {e}"))?;
 
     eprintln!(
         "invite created for vault `{}` (TTL {}s)",
@@ -143,13 +152,4 @@ pub async fn run<P: Prompts + ?Sized>(
     eprintln!("{token_str}");
     eprintln!();
     Ok(token_str)
-}
-
-/// Mirror of `vitonomi_vault::accept::CombinedInvite` — duplicated
-/// here to avoid a dep on the vault crate. Both sides serialize the
-/// same CBOR shape: `{ outer, inner }`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CombinedInvite {
-    pub outer: InviteOuterSummary,
-    pub inner: InviteInnerPayload,
 }

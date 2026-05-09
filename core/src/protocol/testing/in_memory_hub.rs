@@ -542,23 +542,24 @@ impl HubControlPlane for InMemoryHubControlPlane {
 
     async fn accept_vault_invite(&self, req: AcceptRequest) -> Result<AcceptResponse, CoreError> {
         let mut state = self.state.lock().expect("poisoned");
-        let cluster_id = req.invite_outer.cluster_id;
-        let nonce = req.invite_outer.invite_nonce.clone();
+        let cluster_id = req.cluster_id;
+        let nonce = req.invite_nonce.clone();
 
-        // 1. Expiry check.
-        if req.invite_outer.expires_at_ms < self.now() {
-            return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
-        }
-        // 2. Replay check (cleared invite_used on accept).
-        if state.invite_used.contains_key(&nonce) {
-            return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
-        }
-        // 3. Verify hub's stored outer matches what the vault submits.
+        // 1. Look up the hub's stored outer (admin-signed at create time).
         let stored = state
             .invite_outers
             .get(&nonce)
+            .cloned()
             .ok_or(CoreError::Auth(AuthError::InviteUsedOrExpired))?;
-        if stored != &req.invite_outer {
+        // 2. Outer must belong to the requested cluster.
+        if stored.cluster_id != cluster_id {
+            return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
+        }
+        // 3. Expiry + replay checks against stored outer.
+        if stored.expires_at_ms < self.now() {
+            return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
+        }
+        if state.invite_used.contains_key(&nonce) {
             return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
         }
 
@@ -576,21 +577,20 @@ impl HubControlPlane for InMemoryHubControlPlane {
             (cluster.admin_pubkey.clone(), head)
         };
 
-        // 5. Re-verify admin signature on the outer summary.
-        let body_bytes = invite_outer_signed_bytes(&req.invite_outer);
-        crate::crypto::pq::ml_dsa_65_verify(
-            &admin_pubkey,
-            &req.invite_outer.sig_admin_outer,
-            &body_bytes,
-        )?;
+        // 5. Re-verify the admin signature on the stored outer (defense
+        //    in depth — the outer was already verified at create time).
+        let body_bytes = invite_outer_signed_bytes(&stored);
+        crate::crypto::pq::ml_dsa_65_verify(&admin_pubkey, &stored.sig_admin_outer, &body_bytes)?;
 
-        // 6. Verify inner_payload_hash matches the inner the vault submitted.
+        // 6. Verify inner_payload_hash from stored outer matches the
+        //    inner the vault submitted. This is the key bind: only an
+        //    inner whose hash the admin signed can pass.
         let inner_bytes = cbor_to_vec(&req.invite_inner)
             .map_err(|e| CoreError::Crypto(CryptoError::AdminChain(format!("inner CBOR: {e}"))))?;
         let mut inner_hash = [0u8; 32];
         let digest = sha2::Sha256::digest(&inner_bytes);
         inner_hash.copy_from_slice(&digest);
-        if inner_hash[..] != req.invite_outer.inner_payload_hash[..] {
+        if inner_hash[..] != stored.inner_payload_hash[..] {
             return Err(CoreError::Auth(AuthError::InviteUsedOrExpired));
         }
 
@@ -626,6 +626,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
             vault_id,
             cluster_admin_pubkey: admin_pubkey,
             chain_head,
+            invite_outer: stored,
         })
     }
 

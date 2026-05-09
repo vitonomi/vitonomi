@@ -14,8 +14,8 @@ use vitonomi_core::crypto::argon2::Argon2Params;
 use vitonomi_core::crypto::lookup_id::LookupIdParams;
 use vitonomi_core::encoding::cbor_from_slice;
 use vitonomi_core::protocol::wire::accept::AcceptRequest;
+use vitonomi_core::protocol::wire::accept::{encode_short_token, parse_short_token};
 use vitonomi_hub::state::AppState;
-use vitonomi_vault::accept::CombinedInvite;
 use vitonomi_vault::config::VaultConfig;
 
 use vitonomi_cli::commands::cluster_create::{run as cli_cluster_create, ClusterCreateArgs};
@@ -216,14 +216,15 @@ async fn invite_nonce_replay_is_rejected() {
     let _v = setup_and_accept_vault(temp.path(), "pi-1", &hub_url, &token).await;
 
     // Second accept with the SAME token must fail.
-    let combined = CombinedInvite::parse(&token).unwrap();
+    let parsed = parse_short_token(&token).unwrap();
     let vault_kp = vitonomi_core::crypto::pq::ml_dsa_65_keypair().unwrap();
-    let mut signed = combined.outer.invite_nonce.clone();
+    let mut signed = parsed.invite_nonce.clone();
     signed.extend_from_slice(vault_kp.public.as_bytes());
     let sig_vault = vitonomi_core::crypto::pq::ml_dsa_65_sign(&vault_kp.secret, &signed).unwrap();
     let req = AcceptRequest {
-        invite_outer: combined.outer,
-        invite_inner: combined.inner,
+        cluster_id: parsed.cluster_id,
+        invite_nonce: parsed.invite_nonce.clone(),
+        invite_inner: parsed.inner,
         vault_pubkey: vault_kp.public,
         sig_vault,
     };
@@ -504,16 +505,17 @@ async fn tampered_sealed_cluster_key_rejected_at_accept() {
     run_cluster_create(&admin, password).await;
     let token = run_vault_invite(&admin, password, "pi-1").await;
 
-    // Decode the combined invite, flip a byte in sealed_cluster_key,
-    // re-encode. Note: this also invalidates inner_payload_hash, so
-    // accept will fail at sanity_check_invite — the test still proves
-    // the vault won't accept a corrupted invite. The
-    // `unseal_cluster_shared_key` standalone test (in core) covers the
-    // path where only the seal is corrupted.
-    let mut combined = vitonomi_vault::accept::CombinedInvite::parse(&token).unwrap();
-    let last = combined.inner.sealed_cluster_key.len() - 1;
-    combined.inner.sealed_cluster_key[last] ^= 0x01;
-    let bad_token = combined.encode().unwrap();
+    // Decode the short token, flip a byte in sealed_cluster_key,
+    // re-encode. Note: this invalidates the recomputed sha256(inner)
+    // vs the token's `inner_payload_hash`, so accept will fail at
+    // `sanity_check_token` — the test still proves the vault won't
+    // accept a corrupted invite. The `unseal_cluster_shared_key`
+    // standalone test (in core) covers the path where only the seal
+    // is corrupted.
+    let mut parsed = parse_short_token(&token).unwrap();
+    let last = parsed.inner.sealed_cluster_key.len() - 1;
+    parsed.inner.sealed_cluster_key[last] ^= 0x01;
+    let bad_token = encode_short_token(&parsed).unwrap();
 
     let cfg_path = temp.path().join("pi-1-bad.toml");
     let data_dir = temp.path().join("pi-1-bad-data");

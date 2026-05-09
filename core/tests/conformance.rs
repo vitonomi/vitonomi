@@ -136,7 +136,8 @@ async fn register_invite_accept_round_trip() {
 
     let accept = hub
         .accept_vault_invite(AcceptRequest {
-            invite_outer: outer,
+            cluster_id,
+            invite_nonce: invite_nonce.clone(),
             invite_inner: inner,
             vault_pubkey: vault_kp.public.clone(),
             sig_vault,

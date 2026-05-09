@@ -75,12 +75,70 @@ pub struct CreateInviteResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcceptRequest {
-    pub invite_outer: InviteOuterSummary,
+    /// Cluster the vault is joining. The hub uses this together with
+    /// `invite_nonce` to locate the stored `InviteOuterSummary` (which
+    /// carries the admin signature + `inner_payload_hash`).
+    pub cluster_id: ClusterId,
+    /// Locator into the hub's invite map. Same nonce that's inside the
+    /// stored outer.
+    #[serde(with = "serde_bytes")]
+    pub invite_nonce: Vec<u8>,
     pub invite_inner: InviteInnerPayload,
     pub vault_pubkey: MlDsa65PublicKey,
     /// Vault's signature over `invite_nonce || vault_pubkey_bytes`,
     /// proving possession of the secret half of `vault_pubkey`.
     pub sig_vault: MlDsa65Signature,
+}
+
+/// Operator-channel invite token. Replaces the legacy
+/// `CombinedInvite { outer, inner }` shape: the outer is no longer
+/// transported on the operator channel because the hub already holds
+/// it from `POST /v1/vaults/invites`. We only carry the small bag of
+/// identifiers the vault needs to address the existing record on the
+/// hub, plus the genuinely confidential `inner` payload.
+///
+/// Wire form: `base64url(cbor(ShortInviteToken))` — see
+/// [`encode_short_token`] / [`parse_short_token`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortInviteToken {
+    pub format_version: FormatVersion,
+    pub cluster_id: ClusterId,
+    #[serde(with = "serde_bytes")]
+    pub invite_nonce: Vec<u8>,
+    pub expires_at_ms: u64,
+    /// `sha256(cbor(inner))`. Lifted from the admin-signed
+    /// `InviteOuterSummary.inner_payload_hash` at issue time. The
+    /// vault re-checks this locally before any network call to catch
+    /// operator-channel tampering early.
+    #[serde(with = "serde_bytes")]
+    pub inner_payload_hash: Vec<u8>,
+    pub inner: InviteInnerPayload,
+}
+
+/// Encode a [`ShortInviteToken`] as base64url-CBOR for operator
+/// transport.
+///
+/// # Errors
+///
+/// CBOR encoding failures.
+pub fn encode_short_token(
+    token: &ShortInviteToken,
+) -> Result<String, crate::errors::ProtocolError> {
+    let bytes = crate::encoding::cbor_to_vec(token)
+        .map_err(|e| crate::errors::ProtocolError::Malformed(format!("encode token: {e}")))?;
+    Ok(crate::encoding::b64url_encode(&bytes))
+}
+
+/// Decode a [`ShortInviteToken`] from its base64url-CBOR wire form.
+///
+/// # Errors
+///
+/// Decode / CBOR parse failures.
+pub fn parse_short_token(s: &str) -> Result<ShortInviteToken, crate::errors::ProtocolError> {
+    let bytes = crate::encoding::b64url_decode(s.trim())
+        .map_err(|e| crate::errors::ProtocolError::Malformed(format!("decode token b64: {e}")))?;
+    crate::encoding::cbor_from_slice(&bytes)
+        .map_err(|e| crate::errors::ProtocolError::Malformed(format!("decode token cbor: {e}")))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +150,12 @@ pub struct AcceptResponse {
     /// about. The vault verifies its signature against
     /// `cluster_admin_pubkey` and unseals locally.
     pub chain_head: crate::crypto::admin_chain::AdminChainEntry,
+    /// The hub's stored copy of the invite outer (admin-signed).
+    /// Echoed back so the vault can persist it for later
+    /// auto-bootstrap re-presentation. The operator-channel
+    /// `ShortInviteToken` deliberately does NOT carry this 3 KB
+    /// signature — the hub already had it from `create_invite`.
+    pub invite_outer: InviteOuterSummary,
 }
 
 /// Stable byte layout the cluster admin signs when producing

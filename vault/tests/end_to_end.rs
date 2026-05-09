@@ -28,7 +28,7 @@ use vitonomi_core::types::{FormatVersion, Username};
 
 use vitonomi_hub::state::AppState;
 
-use vitonomi_vault::accept::CombinedInvite;
+use vitonomi_core::protocol::wire::accept::{encode_short_token, ShortInviteToken};
 use vitonomi_vault::config::VaultConfig;
 
 async fn boot_hub() -> (String, AppState) {
@@ -193,9 +193,18 @@ async fn vault_init_accept_persists_state_correctly() {
         .await
         .unwrap();
 
-    // Encode the invite the way the operator would paste it.
-    let combined = CombinedInvite { outer, inner };
-    let invite_token = combined.encode().unwrap();
+    // Encode the invite the way the operator would paste it. The
+    // outer is already on the hub via POST above; the operator-channel
+    // token only needs the small bag of locators + inner.
+    let token = ShortInviteToken {
+        format_version: FormatVersion::V1,
+        cluster_id,
+        invite_nonce: outer.invite_nonce.clone(),
+        expires_at_ms: outer.expires_at_ms,
+        inner_payload_hash: outer.inner_payload_hash.clone(),
+        inner,
+    };
+    let invite_token = encode_short_token(&token).unwrap();
     let _ = b64url_encode(b"unused"); // ensure base64 import is wired
 
     // ─── Vault side: init + accept via the library ────────────────
