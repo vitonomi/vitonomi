@@ -502,7 +502,29 @@ impl HubControlPlane for InMemoryHubControlPlane {
             .clusters
             .get(&cluster_id)
             .ok_or_else(|| CoreError::Auth(AuthError::SessionUnknown))?;
-        Ok(cluster.vaults.clone())
+        // Derive each vault's status at read time. The stored
+        // `status` is preserved only for `Revoked`; `Online` vs
+        // `Offline` is computed from `last_seen_ms` + the
+        // `idle_timeout_secs` window, so a vault that crashes / is
+        // killed flips to `Offline` automatically once its
+        // heartbeat goes stale. Without this, the static `Online`
+        // set at registration would never flip.
+        let now = self.now();
+        let idle_ms = crate::protocol::wire::vault_bus::idle_timeout_secs() * 1_000;
+        Ok(cluster
+            .vaults
+            .iter()
+            .map(|v| {
+                let mut clone = v.clone();
+                if clone.status != VaultStatus::Revoked {
+                    clone.status = match clone.last_seen_ms {
+                        Some(ts) if now.saturating_sub(ts) <= idle_ms => VaultStatus::Online,
+                        _ => VaultStatus::Offline,
+                    };
+                }
+                clone
+            })
+            .collect())
     }
 
     async fn create_vault_invite(

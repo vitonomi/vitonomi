@@ -8,6 +8,25 @@ use crate::crypto::challenge::Challenge;
 use crate::crypto::pq::MlDsa65Signature;
 use crate::types::VaultId;
 
+/// Cadence at which an active vault sends a signed `Heartbeat` frame
+/// to the hub. The vault binary uses this directly; hub-side
+/// liveness windows derive from it via [`idle_timeout_secs`].
+pub const HEARTBEAT_INTERVAL_SECS: u64 = 30;
+
+/// A vault is considered offline after this many heartbeat intervals
+/// pass with no frame from it. Combined with `HEARTBEAT_INTERVAL_SECS`
+/// in [`idle_timeout_secs`].
+pub const OFFLINE_AFTER_MISSED_HEARTBEATS: u64 = 2;
+
+/// Hub-side idle timeout: how long the hub waits for a frame before
+/// closing the WS session, AND how stale `last_seen_ms` may be before
+/// `list_vaults` reports the vault as `Offline`. Single source of
+/// truth so the two derivations cannot drift.
+#[must_use]
+pub const fn idle_timeout_secs() -> u64 {
+    HEARTBEAT_INTERVAL_SECS * OFFLINE_AFTER_MISSED_HEARTBEATS
+}
+
 /// First frame from the hub on connect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChallengeFrame {

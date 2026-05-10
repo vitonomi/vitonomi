@@ -14,7 +14,8 @@ use std::time::Duration;
 use vitonomi_core::crypto::challenge::{verify_challenge, Challenge};
 use vitonomi_core::encoding::{cbor_from_slice, cbor_to_vec};
 use vitonomi_core::protocol::wire::vault_bus::{
-    BusFrame, ChallengeFrame, DisconnectFrame, ErrorFrame, SessionEstablishedFrame,
+    idle_timeout_secs, BusFrame, ChallengeFrame, DisconnectFrame, ErrorFrame,
+    SessionEstablishedFrame,
 };
 
 use crate::state::AppState;
@@ -22,9 +23,9 @@ use crate::state::AppState;
 /// Subprotocol identifier negotiated via `Sec-WebSocket-Protocol`.
 pub const SUBPROTOCOL: &str = "vitonomi.vault-bus.v1";
 
-/// Heartbeat-deadline timeout per spec (60 s = 2 × 30 s heartbeat
-/// interval). After this without a frame, hub closes.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+/// Heartbeat-deadline timeout. Derived from the shared core constant
+/// so it cannot drift from the vault-side heartbeat cadence.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(idle_timeout_secs());
 
 pub async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.protocols([SUBPROTOCOL])
@@ -119,7 +120,16 @@ async fn run_session(socket: &mut WebSocket, state: &AppState) -> Result<(), Ses
     )
     .await?;
 
-    // 5. Loop: heartbeats, chain advertises, etc. Idle-timeout = 90 s.
+    // Flip the vault's `last_seen_ms` immediately on a successful
+    // handshake. Without this, a freshly-connected vault wouldn't
+    // appear `Online` in `list_vaults` until its first signed
+    // `Heartbeat` (up to one HEARTBEAT_INTERVAL later).
+    let _ = state
+        .control_plane
+        .touch_vault_last_seen(&cr.vault_id, unix_now_ms())
+        .await;
+
+    // 5. Loop: heartbeats, chain advertises, etc. Idle-timeout per spec.
     loop {
         let next = tokio::time::timeout(IDLE_TIMEOUT, recv_frame(socket)).await;
         let frame = match next {

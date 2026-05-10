@@ -12,7 +12,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use vitonomi_core::crypto::pq::ml_dsa_65_sign;
 use vitonomi_core::protocol::wire::vault_bus::{
-    BusFrame, ChainAdvertiseFrame, ChallengeResponseFrame, HeartbeatFrame,
+    BusFrame, ChainAdvertiseFrame, ChallengeResponseFrame, HeartbeatFrame, HEARTBEAT_INTERVAL_SECS,
 };
 
 use crate::accept::load_enrollment;
@@ -21,7 +21,10 @@ use crate::config::VaultConfig;
 use crate::hub_client;
 use crate::identity;
 
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// Cadence at which the vault sends signed `Heartbeat` frames. The
+/// hub considers the vault offline after `idle_timeout_secs()` of
+/// silence (currently 2× this); see `vitonomi_core::protocol::wire::vault_bus`.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
 
 pub async fn run(cfg: VaultConfig) -> anyhow::Result<()> {
     if cfg.hub.url.is_empty() {
