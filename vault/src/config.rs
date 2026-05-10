@@ -29,9 +29,14 @@ pub struct PathsConfig {
 
 impl Default for PathsConfig {
     fn default() -> Self {
-        Self {
-            data_dir: PathBuf::from("/var/lib/vitonomi-vault"),
-        }
+        // XDG-derived path so a non-root user can run
+        // `vitonomi-vault init && vitonomi-vault accept` without
+        // needing /var. Operator can override via `init --data-dir`
+        // for system-wide deployments.
+        let data_dir = directories::ProjectDirs::from("com", "vitonomi", "vitonomi")
+            .map(|d| d.data_dir().join("vault"))
+            .unwrap_or_else(|| PathBuf::from("./vitonomi-vault-data"));
+        Self { data_dir }
     }
 }
 

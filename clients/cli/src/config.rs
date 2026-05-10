@@ -24,6 +24,13 @@ pub struct CliConfig {
 pub struct HubConfig {
     #[serde(default)]
     pub url: String,
+    /// `sha256:<base64url-no-padding>` SPKI hash of the hub's TLS leaf
+    /// cert. Pinned automatically on `cluster create` (TOFU during the
+    /// HTTPS handshake) and reused as the default `--fingerprint` for
+    /// every later `vault invite`. Manual `--fingerprint` overrides
+    /// it for the cert-rotation case.
+    #[serde(default)]
+    pub cert_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

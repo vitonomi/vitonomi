@@ -118,6 +118,34 @@ pub async fn run<P: Prompts + ?Sized>(
     };
     state::save(args.state_path, &cli_state)?;
 
+    // 8. Probe + pin the hub's TLS fingerprint into cli.toml. Skipped
+    //    for plain-http hubs (test path) and best-effort for https
+    //    (operator can still pass --fingerprint to `vault invite`).
+    if cfg.hub.url.starts_with("https://") {
+        match hub_client::fetch_hub_fingerprint(&cfg.hub.url).await {
+            Ok(fp) => {
+                let mut cfg_with_fp = cfg.clone();
+                cfg_with_fp.hub.cert_fingerprint = fp.clone();
+                if let Err(e) = cfg_with_fp.write_to(args.config_path) {
+                    tracing::warn!(
+                        error = %e,
+                        "could not persist hub.cert_fingerprint to cli.toml; \
+                         pass --fingerprint manually to `vault invite`"
+                    );
+                } else {
+                    eprintln!("  hub.cert_fingerprint: {fp}");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "could not probe hub TLS fingerprint; \
+                     pass --fingerprint manually to `vault invite`"
+                );
+            }
+        }
+    }
+
     // 8. Print seed phrase (operator-visible, write-down-NOW
     //    banner). In tests we suppress via the args flag.
     if args.print_seed_phrase {

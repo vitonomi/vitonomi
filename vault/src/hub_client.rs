@@ -240,9 +240,10 @@ impl ServerCertVerifier for SpkiPinningVerifier {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let spki = extract_spki(end_entity.as_ref()).ok_or_else(|| {
-            rustls::Error::General("could not extract SPKI from leaf cert".into())
-        })?;
+        let spki =
+            vitonomi_core::crypto::spki::extract_spki(end_entity.as_ref()).ok_or_else(|| {
+                rustls::Error::General("could not extract SPKI from leaf cert".into())
+            })?;
         let mut h = Sha256::new();
         h.update(spki);
         let actual = h.finalize();
@@ -291,99 +292,5 @@ impl ServerCertVerifier for SpkiPinningVerifier {
 }
 
 pub(crate) fn extract_spki_pub(cert_der: &[u8]) -> Option<&[u8]> {
-    extract_spki(cert_der)
-}
-
-fn extract_spki(cert_der: &[u8]) -> Option<&[u8]> {
-    let mut p = Asn1Parser {
-        buf: cert_der,
-        pos: 0,
-    };
-    let cert_body = p.read_seq()?;
-    let mut tbs_p = Asn1Parser {
-        buf: cert_body,
-        pos: 0,
-    };
-    let tbs_body = tbs_p.read_seq()?;
-    let mut tbs = Asn1Parser {
-        buf: tbs_body,
-        pos: 0,
-    };
-    if tbs.peek_tag() == Some(0xa0) {
-        tbs.read_tlv()?;
-    }
-    tbs.read_tlv()?; // serialNumber
-    tbs.read_tlv()?; // signature alg
-    tbs.read_tlv()?; // issuer
-    tbs.read_tlv()?; // validity
-    tbs.read_tlv()?; // subject
-    tbs.read_tlv_with_header()
-}
-
-struct Asn1Parser<'a> {
-    buf: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Asn1Parser<'a> {
-    fn peek_tag(&self) -> Option<u8> {
-        self.buf.get(self.pos).copied()
-    }
-    fn read_seq(&mut self) -> Option<&'a [u8]> {
-        let tag = self.read_byte()?;
-        if tag != 0x30 {
-            return None;
-        }
-        let len = self.read_len()?;
-        let s = self.pos;
-        let e = s.checked_add(len)?;
-        if e > self.buf.len() {
-            return None;
-        }
-        self.pos = e;
-        Some(&self.buf[s..e])
-    }
-    fn read_tlv(&mut self) -> Option<&'a [u8]> {
-        let _ = self.read_byte()?;
-        let len = self.read_len()?;
-        let s = self.pos;
-        let e = s.checked_add(len)?;
-        if e > self.buf.len() {
-            return None;
-        }
-        self.pos = e;
-        Some(&self.buf[s..e])
-    }
-    fn read_tlv_with_header(&mut self) -> Option<&'a [u8]> {
-        let h = self.pos;
-        let _ = self.read_byte()?;
-        let len = self.read_len()?;
-        let s = self.pos;
-        let e = s.checked_add(len)?;
-        if e > self.buf.len() {
-            return None;
-        }
-        self.pos = e;
-        Some(&self.buf[h..e])
-    }
-    fn read_byte(&mut self) -> Option<u8> {
-        let b = *self.buf.get(self.pos)?;
-        self.pos += 1;
-        Some(b)
-    }
-    fn read_len(&mut self) -> Option<usize> {
-        let b = self.read_byte()?;
-        if b & 0x80 == 0 {
-            return Some(b as usize);
-        }
-        let n = (b & 0x7f) as usize;
-        if n == 0 || n > std::mem::size_of::<usize>() {
-            return None;
-        }
-        let mut len = 0usize;
-        for _ in 0..n {
-            len = (len << 8) | (self.read_byte()? as usize);
-        }
-        Some(len)
-    }
+    vitonomi_core::crypto::spki::extract_spki(cert_der)
 }

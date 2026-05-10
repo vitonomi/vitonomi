@@ -11,9 +11,6 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Context as _};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
-use sha2::{Digest, Sha256};
 
 use crate::config::HubConfig;
 
@@ -105,125 +102,8 @@ fn compute_spki_fingerprint(cert_pem: &[u8], cert_path: &Path) -> anyhow::Result
         .next()
         .ok_or_else(|| anyhow!("{} contains no certificates", cert_path.display()))?
         .map_err(|e| anyhow!("parse cert: {e}"))?;
-    let spki = extract_spki(leaf.as_ref())
-        .ok_or_else(|| anyhow!("could not extract SubjectPublicKeyInfo from leaf cert"))?;
-    let mut h = Sha256::new();
-    h.update(spki);
-    let digest = h.finalize();
-    Ok(format!("sha256:{}", URL_SAFE_NO_PAD.encode(digest)))
-}
-
-/// Pull the SPKI bytes out of a DER-encoded X.509 certificate.
-///
-/// We intentionally keep this lightweight (parsing one outer
-/// SEQUENCE → tbsCertificate SEQUENCE → skip 6 fields → SPKI
-/// SEQUENCE) rather than pulling in a heavyweight ASN.1 crate.
-fn extract_spki(cert_der: &[u8]) -> Option<&[u8]> {
-    let mut p = Asn1Parser {
-        buf: cert_der,
-        pos: 0,
-    };
-    // outer Certificate SEQUENCE
-    let cert_body = p.read_seq()?;
-    let mut tbs_p = Asn1Parser {
-        buf: cert_body,
-        pos: 0,
-    };
-    let tbs_body = tbs_p.read_seq()?;
-    let mut tbs = Asn1Parser {
-        buf: tbs_body,
-        pos: 0,
-    };
-    // version [0] EXPLICIT (optional, default v1) — skip if present
-    if tbs.peek_tag() == Some(0xa0) {
-        tbs.read_tlv()?;
-    }
-    // serialNumber INTEGER
-    tbs.read_tlv()?;
-    // signature AlgorithmIdentifier (SEQUENCE)
-    tbs.read_tlv()?;
-    // issuer Name (SEQUENCE)
-    tbs.read_tlv()?;
-    // validity Validity (SEQUENCE)
-    tbs.read_tlv()?;
-    // subject Name (SEQUENCE)
-    tbs.read_tlv()?;
-    // subjectPublicKeyInfo SEQUENCE — we want the WHOLE TLV including header
-    let spki = tbs.read_tlv_with_header()?;
-    Some(spki)
-}
-
-struct Asn1Parser<'a> {
-    buf: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Asn1Parser<'a> {
-    fn peek_tag(&self) -> Option<u8> {
-        self.buf.get(self.pos).copied()
-    }
-
-    fn read_seq(&mut self) -> Option<&'a [u8]> {
-        let tag = self.read_byte()?;
-        if tag != 0x30 {
-            return None;
-        }
-        let len = self.read_len()?;
-        let start = self.pos;
-        let end = start.checked_add(len)?;
-        if end > self.buf.len() {
-            return None;
-        }
-        self.pos = end;
-        Some(&self.buf[start..end])
-    }
-
-    fn read_tlv(&mut self) -> Option<&'a [u8]> {
-        let _tag = self.read_byte()?;
-        let len = self.read_len()?;
-        let start = self.pos;
-        let end = start.checked_add(len)?;
-        if end > self.buf.len() {
-            return None;
-        }
-        self.pos = end;
-        Some(&self.buf[start..end])
-    }
-
-    fn read_tlv_with_header(&mut self) -> Option<&'a [u8]> {
-        let header_start = self.pos;
-        let _tag = self.read_byte()?;
-        let len = self.read_len()?;
-        let start = self.pos;
-        let end = start.checked_add(len)?;
-        if end > self.buf.len() {
-            return None;
-        }
-        self.pos = end;
-        Some(&self.buf[header_start..end])
-    }
-
-    fn read_byte(&mut self) -> Option<u8> {
-        let b = *self.buf.get(self.pos)?;
-        self.pos += 1;
-        Some(b)
-    }
-
-    fn read_len(&mut self) -> Option<usize> {
-        let b = self.read_byte()?;
-        if b & 0x80 == 0 {
-            return Some(b as usize);
-        }
-        let n = (b & 0x7f) as usize;
-        if n == 0 || n > std::mem::size_of::<usize>() {
-            return None;
-        }
-        let mut len = 0usize;
-        for _ in 0..n {
-            len = (len << 8) | (self.read_byte()? as usize);
-        }
-        Some(len)
-    }
+    vitonomi_core::crypto::spki::fingerprint_for_cert(leaf.as_ref())
+        .ok_or_else(|| anyhow!("could not extract SubjectPublicKeyInfo from leaf cert"))
 }
 
 /// Build a `rustls::ServerConfig` from PEM bytes.

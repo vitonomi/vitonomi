@@ -2838,6 +2838,7 @@ dependencies = [
  "figment",
  "hex",
  "reqwest",
+ "rustls",
  "serde",
  "serde_bytes",
  "serde_json",

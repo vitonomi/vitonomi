@@ -3,7 +3,9 @@
 //! certs in tests). For integration tests with the hub running
 //! plain HTTP, a default `reqwest::Client` works as-is.
 
-use anyhow::{Context as _, Result};
+use std::sync::{Arc, Mutex};
+
+use anyhow::{anyhow, Context as _, Result};
 use reqwest::Client;
 
 use vitonomi_core::protocol::hub_control_plane::{
@@ -23,6 +25,111 @@ pub fn default_client() -> Result<Client> {
         .danger_accept_invalid_certs(true)
         .build()
         .context("build cli HTTP client")
+}
+
+/// Probe the hub's TLS leaf cert, return the canonical
+/// `sha256:<base64url-no-padding>` SPKI fingerprint. Implements
+/// trust-on-first-use: any cert is accepted during the handshake;
+/// the fingerprint is computed from the cert bytes captured on the
+/// way through. `http://` URLs return an explicit error since
+/// there's no TLS to probe.
+///
+/// # Errors
+///
+/// Network / handshake failures or attempts to probe a `http://`
+/// hub.
+pub async fn fetch_hub_fingerprint(hub_url: &str) -> Result<String> {
+    if hub_url.starts_with("http://") {
+        return Err(anyhow!(
+            "cannot probe TLS fingerprint of plain-http hub {hub_url}"
+        ));
+    }
+
+    // Custom verifier: capture the leaf cert bytes during the
+    // handshake while accepting any cert (TOFU — the pinning happens
+    // *after* this probe, by virtue of the user-confirmed value
+    // being persisted into cli.toml).
+    let captured: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let verifier = CapturingVerifier {
+        captured: captured.clone(),
+    };
+
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let tls = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth();
+    let client = Client::builder()
+        .use_preconfigured_tls(tls)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("build cert-capture client")?;
+
+    // Cheapest possible exchange that triggers a full TLS handshake.
+    // Body and status are irrelevant — we only need the cert.
+    let url = format!("{}/v1/status", hub_url.trim_end_matches('/'));
+    let _ = client.get(&url).send().await;
+
+    let leaf = captured
+        .lock()
+        .map_err(|e| anyhow!("captured cert mutex poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| anyhow!("no leaf cert captured during TLS handshake to {hub_url}"))?;
+    vitonomi_core::crypto::spki::fingerprint_for_cert(&leaf)
+        .ok_or_else(|| anyhow!("malformed leaf cert: SPKI extraction failed"))
+}
+
+#[derive(Debug)]
+struct CapturingVerifier {
+    captured: Arc<Mutex<Option<Vec<u8>>>>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for CapturingVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        if let Ok(mut slot) = self.captured.lock() {
+            *slot = Some(end_entity.as_ref().to_vec());
+        }
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::ED25519,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+        ]
+    }
 }
 
 pub async fn register_cluster(

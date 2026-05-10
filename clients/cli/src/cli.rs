@@ -75,8 +75,11 @@ pub enum VaultAction {
         #[arg(long)]
         name: String,
         /// Hub TLS cert SPKI fingerprint (`sha256:<base64url>`).
+        /// Optional: defaults to `cli.toml`'s persisted
+        /// `hub.cert_fingerprint` (auto-pinned by `cluster create`).
+        /// Pass explicitly to override after a hub cert rotation.
         #[arg(long)]
-        fingerprint: String,
+        fingerprint: Option<String>,
         /// Invite TTL in seconds. Default: 900 (15 minutes).
         #[arg(long, default_value_t = 900)]
         ttl: u64,
@@ -182,13 +185,26 @@ where
             } => {
                 let cfg = CliConfig::load(Some(&config_path))?;
                 let state_path = state::resolve_state_path(state_dir_from_cfg(&cfg).as_deref())?;
+                let resolved_fp = match fingerprint {
+                    Some(fp) => fp,
+                    None if !cfg.hub.cert_fingerprint.is_empty() => {
+                        cfg.hub.cert_fingerprint.clone()
+                    }
+                    None => {
+                        return Err(anyhow::anyhow!(
+                            "no hub.cert_fingerprint in cli.toml — \
+                             re-run `cluster create` against the live hub, \
+                             or pass `--fingerprint sha256:...` explicitly"
+                        ));
+                    }
+                };
                 let mut prompts = InteractivePrompts;
                 commands::vault_invite::run(
                     &cfg,
                     commands::vault_invite::VaultInviteArgs {
                         state_path: &state_path,
                         vault_name: name,
-                        hub_cert_fingerprint: fingerprint,
+                        hub_cert_fingerprint: resolved_fp,
                         ttl_secs: ttl,
                     },
                     &mut prompts,

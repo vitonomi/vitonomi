@@ -227,7 +227,11 @@ fn default_config() -> HubConfig {
             single_user: false,
         },
         paths: PathsConfig {
-            data_dir: PathBuf::from("/var/lib/vitonomi-hub"),
+            // XDG-derived path so a non-root user can run
+            // `vitonomi-hub init && vitonomi-hub start` without
+            // needing /var. Operator can override via `init --data-dir`
+            // for system-wide deployments.
+            data_dir: default_data_dir(),
         },
         tls: TlsConfig::default(),
         logging: LoggingConfig {
@@ -236,6 +240,12 @@ fn default_config() -> HubConfig {
         },
         bootstrap: BootstrapConfig::default(),
     }
+}
+
+fn default_data_dir() -> PathBuf {
+    directories::ProjectDirs::from("com", "vitonomi", "vitonomi")
+        .map(|d| d.data_dir().join("hub"))
+        .unwrap_or_else(|| PathBuf::from("./vitonomi-hub-data"))
 }
 
 /// Default config-file location: `$XDG_CONFIG_HOME/vitonomi/hub.toml`.
