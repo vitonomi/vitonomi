@@ -16,4 +16,5 @@ pub mod lookup_id;
 pub mod pq;
 pub mod random;
 pub mod seedphrase;
+pub mod selfencrypt;
 pub mod spki;

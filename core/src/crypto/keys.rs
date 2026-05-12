@@ -26,6 +26,7 @@ use crate::crypto::pq::{
     MlKem768Keypair, MlKem768PublicKey, MlKem768SecretKey,
 };
 use crate::crypto::seedphrase::SeedPhrase;
+use crate::record::user_keys::{derive_user_aead_master, UserAeadMaster};
 
 /// All master keys belonging to a cluster creator.
 pub struct MasterKeys {
@@ -51,17 +52,19 @@ impl MasterKeys {
 
 /// Everything needed to bootstrap a brand-new cluster: random
 /// master keypairs PLUS the deterministic-from-seed cluster pepper +
-/// cluster shared key. Returned by [`GenesisMaterial::generate`].
+/// cluster shared key + per-user AEAD master. Returned by
+/// [`GenesisMaterial::generate`].
 pub struct GenesisMaterial {
     pub master_keys: MasterKeys,
     pub seed_phrase: SeedPhrase,
     pub cluster_pepper: ClusterPepper,
     pub cluster_shared_key: ClusterSharedKey,
+    pub user_aead_master: UserAeadMaster,
 }
 
 impl GenesisMaterial {
     /// Generate a fresh seed phrase + master keys + derived cluster
-    /// pepper / shared key.
+    /// pepper / shared key / user AEAD master.
     ///
     /// # Errors
     ///
@@ -73,6 +76,7 @@ impl GenesisMaterial {
             master_keys: MasterKeys::generate()?,
             cluster_pepper: derive_cluster_pepper(&seed),
             cluster_shared_key: derive_cluster_shared_key(&seed),
+            user_aead_master: derive_user_aead_master(&seed),
             seed_phrase,
         })
     }
@@ -98,8 +102,14 @@ impl From<&MasterKeys> for MasterPublicKeys {
 }
 
 /// The secret-key half of a [`MasterKeys`] bundle PLUS the
-/// cluster-scoped symmetric material. Encrypted into the key blob;
-/// never travels in cleartext after first generation.
+/// cluster-scoped symmetric material PLUS the per-user AEAD master
+/// (V2). Encrypted into the key blob; never travels in cleartext
+/// after first generation.
+///
+/// Format-version note: this struct's CBOR shape is part of the V2
+/// key-blob payload. Adding fields (or reordering) is a key-blob
+/// format break. Pre-live, breaking changes are fine — production
+/// will rotate everything on the V1 → V2 migration anyway.
 #[derive(Clone, Zeroize, ZeroizeOnDrop, Serialize, Deserialize)]
 pub struct MasterSecretKeys {
     /// ML-DSA-65 identity secret-key bytes (32-byte FIPS 204 seed).
@@ -114,6 +124,11 @@ pub struct MasterSecretKeys {
     /// Cluster shared AEAD key (HKDF from BIP-39 seed; seals chain
     /// payloads + vault directory entries).
     pub cluster_shared_key: ClusterSharedKey,
+    /// Per-user AEAD master (HKDF from BIP-39 seed; IKM for
+    /// per-(user, record_type) record-payload + head-pointer keys.
+    /// V2 addition — `cluster_shared_key` is derivable by every
+    /// cluster member so it can't be the IKM for per-user keys.
+    pub user_aead_master: UserAeadMaster,
 }
 
 impl MasterSecretKeys {
@@ -126,6 +141,7 @@ impl MasterSecretKeys {
             kem: MlKem768SecretKeyBytes(g.master_keys.kem.secret.0.clone()),
             cluster_pepper: g.cluster_pepper.clone(),
             cluster_shared_key: g.cluster_shared_key.clone(),
+            user_aead_master: g.user_aead_master.clone(),
         }
     }
 
@@ -143,6 +159,7 @@ impl MasterSecretKeys {
             kem: MlKem768SecretKeyBytes(k.kem.secret.0.clone()),
             cluster_pepper: ClusterPepper(vec![0u8; ClusterPepper::LEN]),
             cluster_shared_key: ClusterSharedKey(vec![0u8; ClusterSharedKey::LEN]),
+            user_aead_master: UserAeadMaster(vec![0u8; UserAeadMaster::LEN]),
         }
     }
 }

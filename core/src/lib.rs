@@ -14,7 +14,10 @@ pub mod encoding;
 pub mod errors;
 pub mod logging;
 pub mod protocol;
+pub mod record;
 pub mod types;
 
-pub use errors::{AuthError, CoreError, CryptoError, NetworkError, ProtocolError, ValidationError};
+pub use errors::{
+    AuthError, CoreError, CryptoError, NetworkError, ProtocolError, StorageError, ValidationError,
+};
 pub use types::{ClusterId, FormatVersion, Result, SessionToken, UserId, Username, VaultId};

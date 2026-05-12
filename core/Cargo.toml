@@ -42,9 +42,18 @@ getrandom = { version = "0.2", features = ["std"] }
 # Hashing + KDF
 sha2 = "0.10"
 hkdf = "0.12"
-# blake3 reserved for chunk addressing (Autonomi-compat); added when
-# chunk-store work begins. Recent blake3 versions require edition2024
-# which lands in Rust 1.85+; we'll bump MSRV at that point.
+# BLAKE3 — used at the chunk-address boundary so `vault` can verify
+# `blake3(bytes) == address` before storing without pulling in
+# `self_encryption` as a direct dependency.
+blake3 = "1.5"
+
+# Autonomi-format self-encryption (chunk + DataMap). Pinned with `=`
+# operator so any version bump triggers a full conformance vector
+# rerun in CI. See `docs/autonomi-compat.md`. Upstream is GPL-3.0
+# (the strong-copyleft cousin of AGPL-3.0); AGPL-3.0 absorbs it
+# cleanly.
+self_encryption = "=0.35.0"
+bytes = "1"
 
 # Symmetric crypto
 chacha20poly1305 = "0.10"

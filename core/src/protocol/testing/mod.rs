@@ -3,3 +3,4 @@
 
 pub mod in_memory_bus;
 pub mod in_memory_hub;
+pub mod in_memory_storage;

@@ -37,6 +37,12 @@ allow = [
     "CC0-1.0",
     "AGPL-3.0",
     "AGPL-3.0-only",
+    # `self_encryption` (Autonomi 2.0 chunking) is GPL-3.0; AGPL-3.0
+    # absorbs GPL-3.0 cleanly so this is fine for the encryption-
+    # boundary crate. Restricted to `vitonomi-core` via the bans
+    # section below.
+    "GPL-3.0",
+    "GPL-3.0-only",
 ]
 exceptions = []
 
@@ -86,4 +92,10 @@ wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
 
 [[bans.deny]]
 name = "bip39"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
+
+# Autonomi-format chunking. Only `core` may call into upstream
+# `self_encryption` so the wrapper-then-pinned-version contract holds.
+[[bans.deny]]
+name = "self_encryption"
 wrappers = ["vitonomi-core", "vitonomi-core-wasm"]

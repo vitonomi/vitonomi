@@ -1,7 +1,7 @@
 ---
-formatVersion: 1
+formatVersion: 2
 status: partial
-last-reviewed: 2026-05-01
+last-reviewed: 2026-05-12
 ---
 
 # vitonomi data format
@@ -20,10 +20,13 @@ conformance vector identifiers.
 implementation phases:
 
 - v0.1 (Phase 2 → mini-MVP Step 2): conventions + algorithm-id
-  table + key blob + seed phrase + invite token + admin chain
-  entry
-- v0.2 (Phase 5): snapshot envelope + RecordFrame + head pointer
-- v0.3 (Phase 8): alias-pubkey directory entry
+  table + key blob V1 + seed phrase + invite token + admin chain
+  entry.
+- v0.2 (data-plane slice 1, 2026-05-12): key blob V2 with
+  `user_aead_master` + RecordType discriminator + RecordFrame +
+  Snapshot envelope (3 layers) + Head pointer envelope (3 layers)
+  + `backup_targets` enumeration.
+- v0.3 (Phase 8): alias-pubkey directory entry.
 
 Sections marked **TBD** are landing in the corresponding phase.
 
@@ -111,14 +114,18 @@ mechanism — see [`architecture.md`](architecture.md).
 
 ```text
 KeyBlob {
-  magic:         bytes(4)   = b"VKB1",
-  format_version: uint8      = 1,
-  ciphertext:    bytes(var), // nonce(24) || aead_ct
+  magic:          bytes(4)   = b"VKB2",
+  format_version: uint8      = 2,
+  enc_salt:       bytes(16+),
+  argon2_params:  Argon2Params,
+  ciphertext:     bytes(var), // nonce(24) || aead_ct(MasterSecretKeys-CBOR)
 }
 ```
 
 Encoded with deterministic CBOR (RFC 8949 strict). Magic is the
-ASCII bytes `0x56 0x4b 0x42 0x31`.
+ASCII bytes `0x56 0x4b 0x42 0x32`. V1 was `VKB1` and did not carry
+the `user_aead_master` field below; V1 blobs are not readable by
+V2 code. Pre-live there is no migration shim.
 
 ### AEAD layer
 
@@ -133,7 +140,7 @@ ASCII bytes `0x56 0x4b 0x42 0x31`.
 - Plaintext: deterministic-CBOR-encoded `MasterSecretKeys` struct
   (see below).
 
-### `MasterSecretKeys` plaintext
+### `MasterSecretKeys` plaintext (V2)
 
 ```text
 MasterSecretKeys {
@@ -142,6 +149,7 @@ MasterSecretKeys {
   kem:                bytes(64),  // ML-KEM-768 FIPS 203 seed (d || z)
   cluster_pepper:     bytes(32),  // see "Cluster pepper + lookup_id"
   cluster_shared_key: bytes(32),  // see "Cluster shared key"
+  user_aead_master:   bytes(32),  // V2 — see "Per-user AEAD master"
 }
 ```
 
@@ -152,10 +160,34 @@ payload that deterministically regenerates the full keypair on
 every use. See [`autonomi-compat.md`](autonomi-compat.md) for the
 rationale.
 
-`cluster_pepper` and `cluster_shared_key` are HKDF-derived from
-the BIP-39 seed at registration (info strings below) and stored
-in the blob so loss of the hub doesn't lose them. Both are
-deterministic, so seed-phrase recovery rebuilds them.
+`cluster_pepper`, `cluster_shared_key`, and `user_aead_master` are
+all HKDF-derived from the BIP-39 seed at registration (info
+strings below) and stored in the blob so loss of the hub doesn't
+lose them. All three are deterministic, so seed-phrase recovery
+rebuilds them.
+
+### Per-user AEAD master
+
+A 32-byte HKDF-SHA-256 output that is the IKM for two further
+derivations:
+
+- **Per-(user, record_type) AEAD key** — `HKDF(IKM=user_aead_master,
+  salt=user_id, info="vitonomi/record_aead/v1/" || record_type)` —
+  seals record payloads and signed snapshot envelopes.
+- **Per-user head-pointer AEAD key** — `HKDF(IKM=user_aead_master,
+  salt=user_id, info="vitonomi/head_pointer_aead/v1")` — seals the
+  user's head-pointer envelope.
+
+Why a separate IKM from `cluster_shared_key`: every cluster member
+can derive `cluster_shared_key` (it's the K2 invite-KEK path).
+Using it as IKM here would let any cluster member derive any other
+member's per-user record AEAD key. `user_aead_master` lives only
+in the user's own key blob, never traverses any other channel.
+
+`user_aead_master` is derived as
+`HKDF(IKM=BIP-39 seed, salt=None, info="vitonomi/user_aead_master/v1",
+out_len=32)`. Deterministic from seed → seed-phrase recovery
+rebuilds it without round-tripping the hub.
 
 ### Argon2id parameter encoding
 
@@ -270,23 +302,144 @@ library bumps its format, the migration is an explicit
 returned by upstream `selfencrypt.encrypt(bytes)` is the format
 vitonomi RecordFrames embed and the format the head pointer carries.
 
-## RecordFrame — TBD (Phase 5)
+## RecordType discriminator
+
+Each record type has a stable u8 byte assignment carried on the
+wire (inside snapshot envelopes and in AEAD AAD bindings):
+
+| RecordType    | u8 byte | Status   |
+| ------------- | ------- | -------- |
+| Credential    | `0x01`  | MVP      |
+| Alias         | `0x02`  | MVP      |
+| AliasMessage  | `0x03`  | MVP      |
+| Photo         | `0x10`  | reserved |
+| Note          | `0x20`  | reserved |
+| File          | `0x30`  | reserved |
+| Other values  |         | reserved — parse-error on read in V1 |
+
+Adding a new MVP-tier record type does not require a `formatVersion`
+bump (readers in V1 already reject reserved bytes). Promoting a
+reserved byte from "parse-error" to "live" does — readers must
+accept the new value.
+
+## RecordFrame
 
 Per-record framing inside a snapshot envelope. Carries the DataMap
-for the record's encrypted payload and metadata about the operation
-(`put` vs `delete`, `prevRecordVersion`).
+for the record's AEAD-encrypted payload plus the op (`put` /
+`delete`) and a monotonic per-record version.
 
-## Snapshot envelope — TBD (Phase 5)
+```text
+RecordFrame {
+  record_id:           bytes(16),       // random per-record id
+  op_tag:              uint8,            // 0x01 = Put, 0x02 = Delete
+  payload_data_map:    optional bytes(var),
+                                         // present iff op_tag == 0x01;
+                                         // upstream self_encryption DataMap
+                                         // bytes (bincode-encoded)
+  prev_record_version: uint64,           // strictly monotonic per record_id
+}
+```
 
-Top-level envelope containing a batch of RecordFrames, signed with
-ML-DSA-65, then AEAD-encrypted, then run through self-encryption.
+The cumulative-frames model: every snapshot carries the latest frame
+per `record_id` for that `record_type`. Compaction (truncating old
+frames into a fresh genesis snapshot) is a v1.1 follow-up.
 
-## Head pointer envelope — TBD (Phase 5)
+## Snapshot envelope
 
-Compact envelope holding the latest snapshot's DataMap, seq, and
-signature. AEAD-encrypted with the user's encryption key for
-storage on the hub, in IndexedDB, and in the seed-phrase backup
-file.
+Three nested layers — the chain head, the AEAD envelope, and the
+self-encryption chunking.
+
+### Layer 1 — `Snapshot` plaintext (signed)
+
+```text
+Snapshot {
+  format_version: uint8 = 1,
+  record_type:    uint8,                // RecordType discriminator
+  seq:            uint64,                // monotonic; genesis = 0
+  prev_address:   optional bytes(32),    // ChunkAddress of prior snapshot's
+                                         //   first chunk; None at genesis
+  frames:         RecordFrame[],         // cumulative live frames
+  backup_targets: string[],              // {"vault"} in MVP
+}
+SignedSnapshot {
+  snapshot: Snapshot,
+  sig_user: bytes(~3309),                // ML-DSA-65 over CBOR(Snapshot)
+}
+```
+
+Frames inside a snapshot MUST be sorted by `record_id` lexicographically
+so deterministic CBOR encoding is stable across equivalent logical
+states.
+
+### Layer 2 — AEAD encryption
+
+- Algorithm: **XChaCha20-Poly1305** (algId `0x03`).
+- Key: per-(user, record_type) — see "Per-user AEAD master".
+- Nonce: 24 random bytes per re-encryption, prefixed.
+- AAD: `b"vitonomi/snapshot/v1" || user_id(16) || record_type(1) ||
+  seq_be8`. Binds the user, record type, and seq into the seal so a
+  malicious hub cannot substitute a snapshot from a different
+  `(user, record_type, seq)` triple.
+- Plaintext: deterministic-CBOR-encoded `SignedSnapshot`.
+
+### Layer 3 — Self-encryption
+
+- Input: the Layer-2 AEAD ciphertext.
+- Output: a `Vec<Chunk>` + a `DataMap`, byte-identical to upstream
+  `self_encryption::encrypt(input)` (see
+  [`autonomi-compat.md`](autonomi-compat.md)).
+- The DataMap rides inline in the head pointer (Layer 1 of the head
+  pointer below); chunks land in the vault chunk store under their
+  BLAKE3 content addresses.
+
+## Head pointer envelope
+
+Three nested layers — the plaintext head pointer, the AEAD envelope,
+and the hub-side outer-signed wrapper.
+
+### Layer 1 — `HeadPointer` plaintext (signed)
+
+```text
+HeadPointer {
+  format_version:    uint8 = 1,
+  snapshot_data_map: bytes(var),      // upstream self_encryption DataMap
+                                       //   bytes for the snapshot envelope
+  seq:               uint64,
+  sig_user_inner:    bytes(~3309),     // ML-DSA-65 over
+                                       //   (snapshot_data_map || seq_be8)
+}
+```
+
+### Layer 2 — AEAD encryption
+
+- Algorithm: **XChaCha20-Poly1305** (algId `0x03`).
+- Key: per-user head-pointer key — see "Per-user AEAD master".
+- Nonce: 24 random bytes per re-encryption, prefixed.
+- AAD: `b"vitonomi/head_pointer/v1" || cluster_id(32) || user_id(16) ||
+  record_type(1)`.
+- Plaintext: deterministic-CBOR-encoded `HeadPointer`.
+
+### Layer 3 — `StoredHeadPointer` (what the hub stores)
+
+```text
+StoredHeadPointer {
+  format_version:    uint8 = 1,
+  seq:               uint64,           // exposed plaintext — rollback
+                                       //   protection key on the hub side
+  encrypted_pointer: bytes(var),       // Layer-2 AEAD ciphertext
+  sig_user_outer:    bytes(~3309),     // ML-DSA-65 over
+                                       //   cluster_id(32) || user_id(16)
+                                       //   || record_type(1) || seq_be8
+                                       //   || sha256(encrypted_pointer)
+}
+```
+
+The hub sees: `seq` (plaintext, monotonic), the opaque
+`encrypted_pointer`, and `sig_user_outer`. The hub enforces
+`new.seq > stored.seq` on `PUT /v1/library/head/...` (Slice 4 of the
+data-plane milestone). The outer sig prevents a malicious hub from
+substituting a fabricated body — the client verifies it before
+opening the AEAD layer.
 
 ## Invite token
 

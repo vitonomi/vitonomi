@@ -11,4 +11,5 @@ pub mod autonomi_bridge;
 pub mod hub_control_plane;
 pub mod testing;
 pub mod vault_bus;
+pub mod vault_storage;
 pub mod wire;

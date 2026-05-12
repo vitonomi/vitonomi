@@ -91,6 +91,38 @@ pub enum NetworkError {
     Http { status: u16, message: String },
 }
 
+/// Storage-layer failures: chunk / record store operations on the
+/// vault disk or the in-memory test fixtures.
+#[derive(Debug, Error)]
+pub enum StorageError {
+    #[error(
+        "chunk address mismatch: expected blake3 {expected_hex}, got {actual_hex}",
+        expected_hex = hex_short(expected),
+        actual_hex = hex_short(actual),
+    )]
+    AddressMismatch {
+        expected: [u8; 32],
+        actual: [u8; 32],
+    },
+    #[error("chunk not found")]
+    NotFound,
+    #[error("owner mismatch on chunk operation")]
+    OwnerMismatch,
+    #[error("storage I/O error: {0}")]
+    Io(String),
+    #[error("storage backend error: {0}")]
+    Backend(String),
+}
+
+fn hex_short(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(16);
+    for b in &bytes[..8] {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
 /// Cross-cutting umbrella error type. Specific layers should prefer
 /// the more precise enums above; this exists for aggregation in
 /// `Result<T>` aliases at trait boundaries.
@@ -106,4 +138,6 @@ pub enum CoreError {
     Validation(#[from] ValidationError),
     #[error(transparent)]
     Network(#[from] NetworkError),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
 }

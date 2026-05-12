@@ -1,7 +1,7 @@
 ---
 formatVersion: 1
-status: stub
-last-reviewed: 2026-05-01
+status: partial
+last-reviewed: 2026-05-12
 ---
 
 # Autonomi 2.0 compatibility
@@ -45,30 +45,60 @@ chunk.bytes)`. Zero re-encryption. Zero format conversion.
 
 ## Version pin
 
-**TBD (Phase 2).** When the Phase 2 self-encryption wrapper is
-written, this section is filled in with:
+| Field            | Value                                                                |
+| ---------------- | -------------------------------------------------------------------- |
+| Upstream crate   | `self_encryption`                                                    |
+| Pinned version   | `=0.35.0` (exact)                                                    |
+| Published        | 2026-03-13                                                           |
+| License          | GPL-3.0 (allowed by `deny.toml`; AGPL-3.0 absorbs GPL-3.0 cleanly)   |
+| Crates.io        | https://crates.io/crates/self_encryption/0.35.0                      |
+| Source repo      | https://github.com/maidsafe/self_encryption                          |
 
-- Upstream package name and version
-- Integrity digest (SHA-256 of the published artefact)
-- Link to the upstream release tag
-- Link to the upstream specification document
+Pinned with the `=` operator in `core/Cargo.toml` so a version bump
+cannot land silently — any change forces an explicit PR that
+re-runs the conformance suite.
 
-Until Phase 2, this section is a placeholder. The wrapper is not
-written, the version is not pinned, and the conformance gate is
-not in place. Implementations MUST NOT ship without this section
-filled in.
+The crate's public API surface that vitonomi consumes:
+
+- `pub fn encrypt(bytes: bytes::Bytes) -> Result<(DataMap, Vec<EncryptedChunk>)>`
+- `pub fn decrypt(data_map: &DataMap, chunks: &[EncryptedChunk]) -> Result<bytes::Bytes>`
+- `pub struct DataMap { chunk_identifiers: Vec<ChunkInfo>, child: Option<usize> }`
+- `pub struct ChunkInfo { index: usize, dst_hash: XorName, src_hash: XorName, src_size: usize }`
+- `pub struct EncryptedChunk { content: bytes::Bytes }`
+- `pub use xor_name::XorName;`     // 32-byte BLAKE3 wrapper
+
+vitonomi wraps these in
+[`core/src/crypto/selfencrypt.rs`](../core/src/crypto/selfencrypt.rs)
+which exposes `encrypt(&[u8])` and `decrypt(&DataMap, fetcher)` to
+the rest of the codebase. Downstream crates never reference upstream
+types directly.
 
 ## Hash function for chunk addressing
 
-**TBD (Phase 2).** Whatever upstream specifies — most likely
-BLAKE3. Documented authoritatively here once pinned.
+**BLAKE3-256.** The 32-byte `XorName` produced by upstream is
+`blake3(encrypted_chunk_bytes).as_bytes()`. vitonomi's
+`ChunkAddress` is the same 32 bytes, and the
+`verify_chunk_address(address, bytes)` helper in
+`crypto::selfencrypt` performs the defence-in-depth check
+`blake3(bytes) == address` at every vault storage write.
 
 ## Conformance vectors
 
-**TBD (Phase 2).** Identifiers (paths or hashes) of the upstream
-test vectors that vitonomi's CI runs as a release gate. Any
-attempt to upgrade the upstream pin re-runs all vectors before
-the upgrade can land.
+In-tree round-trip tests live in
+`core/src/crypto/selfencrypt.rs::tests`. The critical ones:
+
+- `chunk_address_equals_blake3_of_bytes` — proves the address-
+  invariant for inputs of 8 KiB.
+- `verify_chunk_address_accepts_match` / `_rejects_tampered_bytes`
+  — proves the BLAKE3 verification step.
+- `aead_then_selfencrypt_breaks_convergence` — same plaintext
+  through two AEAD keys yields disjoint chunk address sets.
+- `encrypt_decrypt_round_trip_3kib` / `_100kib` — full pipeline.
+
+A future cross-version conformance suite (slice 3) will compare
+vitonomi's chunk bytes byte-for-byte with a side-by-side direct call
+into upstream `self_encryption::encrypt(...)` on the same input —
+guarding against any wrapper-induced drift.
 
 ## The bridging interface
 

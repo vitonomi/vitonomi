@@ -13,13 +13,17 @@
 //!
 //! ```text
 //! KeyBlob {
-//!     magic:          [u8; 4]         = b"VKB1",
-//!     format_version: u8              = 1,
+//!     magic:          [u8; 4]         = b"VKB2",
+//!     format_version: u8              = 2,
 //!     enc_salt:       Vec<u8>         (>= 16 bytes random),
 //!     argon2_params:  Argon2Params,
 //!     ciphertext:     Vec<u8>,        // nonce(24) || aead_ct(MasterSecretKeys-CBOR)
 //! }
 //! ```
+//!
+//! V2 adds a `user_aead_master` field to the inner `MasterSecretKeys`
+//! payload. V1 blobs are unreadable by V2 code (pre-live, breaking
+//! changes are fine per `feedback_breaking_changes_dev.md`).
 
 use serde::{Deserialize, Serialize};
 
@@ -31,10 +35,11 @@ use crate::encoding::{cbor_from_slice, cbor_to_vec};
 use crate::errors::CryptoError;
 
 /// Magic bytes identifying a vitonomi key blob.
-pub const MAGIC: [u8; 4] = *b"VKB1";
+pub const MAGIC: [u8; 4] = *b"VKB2";
 
-/// Current key-blob format version.
-pub const FORMAT_VERSION: u8 = 1;
+/// Current key-blob format version. V2 carries `user_aead_master`
+/// alongside the existing master secret keys.
+pub const FORMAT_VERSION: u8 = 2;
 
 /// Default `enc_salt` length in bytes. Argon2 spec recommends at
 /// least 16; we use exactly 16.
