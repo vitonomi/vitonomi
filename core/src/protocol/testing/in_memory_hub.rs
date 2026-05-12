@@ -383,6 +383,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
                     last_seen_ms: None,
                     status: VaultStatus::Online,
                     sealed_meta: vec![],
+                    multiaddrs: vec![],
                 });
                 (vault_id, true)
             }
@@ -639,6 +640,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
                 last_seen_ms: None,
                 status: VaultStatus::Online,
                 sealed_meta: vec![], // Real hub seals vault_name + role + ts here.
+                multiaddrs: vec![],
             });
         }
         state.invite_used.insert(nonce, ());
@@ -730,6 +732,35 @@ impl HubControlPlane for InMemoryHubControlPlane {
                     .last()
                     .cloned()
                     .ok_or_else(|| CoreError::Crypto(CryptoError::AdminChain("empty".into())));
+            }
+        }
+        Err(CoreError::Auth(AuthError::Forbidden))
+    }
+
+    async fn update_vault_multiaddrs(
+        &self,
+        vault_id: &VaultId,
+        multiaddrs: Vec<String>,
+    ) -> Result<(), CoreError> {
+        let mut state = self.state.lock().expect("poisoned");
+        for cluster in state.clusters.values_mut() {
+            if let Some(v) = cluster.vaults.iter_mut().find(|v| v.vault_id == *vault_id) {
+                v.multiaddrs = multiaddrs;
+                return Ok(());
+            }
+        }
+        Err(CoreError::Auth(AuthError::Forbidden))
+    }
+
+    async fn get_user_identity_pubkey(
+        &self,
+        cluster_id: &ClusterId,
+        user_id: &UserId,
+    ) -> Result<crate::crypto::pq::MlDsa65PublicKey, CoreError> {
+        let state = self.state.lock().expect("poisoned");
+        for user in state.users_by_lookup.values() {
+            if user.cluster_id == *cluster_id && user.user_id == *user_id {
+                return Ok(user.identity_pubkey.clone());
             }
         }
         Err(CoreError::Auth(AuthError::Forbidden))

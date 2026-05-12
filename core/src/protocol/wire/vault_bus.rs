@@ -78,6 +78,42 @@ pub struct ChainAdvertiseFrame {
     pub head_hash: Vec<u8>,
 }
 
+/// Vault → hub: replace this vault's advertised libp2p multiaddrs.
+/// Carries a signed `ts_ms` for replay defence; the hub binds the
+/// vault identity to the active WS session already, so this frame's
+/// signature is defence-in-depth.
+///
+/// The hub stores the resulting set in `VaultRecord::multiaddrs` so
+/// clients calling `GET /v1/vaults` find it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdvertiseAddrsFrame {
+    pub vault_id: VaultId,
+    pub multiaddrs: Vec<String>,
+    pub ts_ms: u64,
+    pub signature: MlDsa65Signature,
+}
+
+/// Build the bytes the vault signs for an `AdvertiseAddrsFrame`.
+/// Stable layout: `vault_id || ts_ms_be8 || u32-BE addr count ||
+/// (u32-BE len || addr_bytes)*`.
+#[must_use]
+pub fn advertise_addrs_signed_bytes(
+    vault_id: &VaultId,
+    multiaddrs: &[String],
+    ts_ms: u64,
+) -> Vec<u8> {
+    let mut buf =
+        Vec::with_capacity(16 + 8 + 4 + multiaddrs.iter().map(|s| 4 + s.len()).sum::<usize>());
+    buf.extend_from_slice(&vault_id.0);
+    buf.extend_from_slice(&ts_ms.to_be_bytes());
+    buf.extend_from_slice(&(multiaddrs.len() as u32).to_be_bytes());
+    for addr in multiaddrs {
+        buf.extend_from_slice(&(addr.len() as u32).to_be_bytes());
+        buf.extend_from_slice(addr.as_bytes());
+    }
+    buf
+}
+
 /// Top-level frame enum with a `kind` discriminator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -88,6 +124,7 @@ pub enum BusFrame {
     Heartbeat(HeartbeatFrame),
     ChainAppend(ChainAppendFrame),
     ChainAdvertise(ChainAdvertiseFrame),
+    AdvertiseAddrs(AdvertiseAddrsFrame),
     Error(ErrorFrame),
     Disconnect(DisconnectFrame),
 }

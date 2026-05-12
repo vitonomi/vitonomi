@@ -71,6 +71,12 @@ pub struct VaultRecord {
     /// vault_role, enrollment_ts, etc. Hub stores opaque bytes.
     #[serde(with = "serde_bytes")]
     pub sealed_meta: Vec<u8>,
+    /// libp2p multiaddrs the vault has advertised over the vault-bus
+    /// (data-plane slice 3+). Empty before the vault publishes any.
+    /// Most-recent advertisement replaces the previous set; the hub
+    /// does NOT merge.
+    #[serde(default)]
+    pub multiaddrs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -184,4 +190,23 @@ pub trait HubControlPlane: Send + Sync {
         &self,
         vault_id: &VaultId,
     ) -> Result<AdminChainEntry, CoreError>;
+
+    /// Replace a vault's advertised libp2p multiaddrs. Called by the
+    /// hub's WS vault-bus handler when an authenticated vault sends
+    /// an [`crate::protocol::wire::vault_bus::AdvertiseAddrsFrame`].
+    /// Empty input clears the address set.
+    async fn update_vault_multiaddrs(
+        &self,
+        vault_id: &VaultId,
+        multiaddrs: Vec<String>,
+    ) -> Result<(), CoreError>;
+
+    /// Look up a user's ML-DSA-65 identity pubkey by `(cluster_id,
+    /// user_id)`. Used by vaults to verify per-request signatures
+    /// on `/vitonomi/chunks/1.0.0`.
+    async fn get_user_identity_pubkey(
+        &self,
+        cluster_id: &ClusterId,
+        user_id: &crate::types::UserId,
+    ) -> Result<crate::crypto::pq::MlDsa65PublicKey, CoreError>;
 }

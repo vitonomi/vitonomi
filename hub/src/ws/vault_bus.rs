@@ -173,6 +173,38 @@ async fn run_session(socket: &mut WebSocket, state: &AppState) -> Result<(), Ses
                 // gossip ships in v1.1+. For now, log + ignore.
                 tracing::debug!("received ChainAdvertise from vault");
             }
+            BusFrame::AdvertiseAddrs(adv) => {
+                let pk2 = state
+                    .control_plane
+                    .get_vault_pubkey(&adv.vault_id)
+                    .await
+                    .map_err(|_| SessionError {
+                        code: "auth.unknown_vault".into(),
+                        message: "vault not registered".into(),
+                    })?;
+                let signed = vitonomi_core::protocol::wire::vault_bus::advertise_addrs_signed_bytes(
+                    &adv.vault_id,
+                    &adv.multiaddrs,
+                    adv.ts_ms,
+                );
+                if vitonomi_core::crypto::pq::ml_dsa_65_verify(&pk2, &adv.signature, &signed)
+                    .is_err()
+                {
+                    return Err(SessionError {
+                        code: "auth.advertise_addrs_invalid".into(),
+                        message: "advertise-addrs signature invalid".into(),
+                    });
+                }
+                let _ = state
+                    .control_plane
+                    .update_vault_multiaddrs(&adv.vault_id, adv.multiaddrs.clone())
+                    .await;
+                tracing::debug!(
+                    vault = ?adv.vault_id,
+                    count = adv.multiaddrs.len(),
+                    "vault advertised multiaddrs"
+                );
+            }
             BusFrame::Disconnect(d) => {
                 tracing::info!(reason = %d.reason, "vault disconnected");
                 return Ok(());
@@ -272,6 +304,7 @@ fn frame_kind(f: &BusFrame) -> &'static str {
         BusFrame::Heartbeat(_) => "Heartbeat",
         BusFrame::ChainAppend(_) => "ChainAppend",
         BusFrame::ChainAdvertise(_) => "ChainAdvertise",
+        BusFrame::AdvertiseAddrs(_) => "AdvertiseAddrs",
         BusFrame::Error(_) => "Error",
         BusFrame::Disconnect(_) => "Disconnect",
     }

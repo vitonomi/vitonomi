@@ -37,6 +37,7 @@ fn synthetic_vault(last_seen_ms: Option<u64>, status: VaultStatus) -> VaultRecor
         last_seen_ms,
         status,
         sealed_meta: vec![],
+        multiaddrs: vec![],
     }
 }
 

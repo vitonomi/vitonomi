@@ -50,6 +50,13 @@ pub fn router(state: AppState) -> Router {
             "/v1/vaults/accept",
             post(crate::routes::vaults::post_accept),
         )
+        // Public user identity-pubkey lookup (no auth — pubkeys are
+        // public). Vaults call this to verify per-op signatures on
+        // /vitonomi/chunks/1.0.0.
+        .route(
+            "/v1/clusters/{cluster_id}/users/{user_id}/identity-pubkey",
+            get(crate::routes::users::get_identity_pubkey),
+        )
         // Admin chain
         .route(
             "/v1/admin-chain/{cluster_id}/head",
