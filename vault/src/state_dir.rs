@@ -4,11 +4,15 @@
 //! <data_dir>/
 //!   identity.bin            ML-DSA-65 vault keypair (32-byte seed)
 //!   enrollment.json         post-accept state
+//!   cluster_shared_key.bin  AEAD key sealing chain inner payloads
 //!   admin-chain/
 //!     <seq>.cbor            one outer-envelope per file
+//!   chunks/
+//!     <aa>/<aa..>.chunk     Autonomi-format chunk bytes
+//!   index.sqlite            chunk metadata (sqlx-backed)
 //! ```
 //!
-//! All files MUST be mode 0600. Parent directory MUST NOT be
+//! All files MUST be mode 0600. Parent directories MUST NOT be
 //! world-writable. Vault refuses to start if either invariant is
 //! broken.
 
@@ -46,6 +50,22 @@ pub fn cluster_shared_key_path(data_dir: &Path) -> PathBuf {
     data_dir.join("cluster_shared_key.bin")
 }
 
+/// `<data_dir>/chunks/` — sharded directory holding Autonomi-format
+/// chunk bytes. Each chunk lives at
+/// `<data_dir>/chunks/<aa>/<full-hex-address>.chunk` where `<aa>` is
+/// the first two hex chars of the 32-byte BLAKE3 address.
+#[must_use]
+pub fn chunks_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("chunks")
+}
+
+/// `<data_dir>/index.sqlite` — chunk metadata index
+/// `(address, owner_user_id, size, created_at_ms, replicated_to_peers)`.
+#[must_use]
+pub fn chunk_index_db(data_dir: &Path) -> PathBuf {
+    data_dir.join("index.sqlite")
+}
+
 /// Create the data directory if missing, enforcing 0700 on it and
 /// 0600 on every file underneath.
 ///
@@ -74,6 +94,13 @@ pub fn ensure_data_dir(data_dir: &Path) -> anyhow::Result<()> {
             .with_context(|| format!("create admin-chain dir {}", admin_chain.display()))?;
         fs::set_permissions(&admin_chain, std::fs::Permissions::from_mode(0o700))
             .with_context(|| format!("chmod 0700 {}", admin_chain.display()))?;
+    }
+    let chunks = chunks_dir(data_dir);
+    if !chunks.exists() {
+        fs::create_dir_all(&chunks)
+            .with_context(|| format!("create chunks dir {}", chunks.display()))?;
+        fs::set_permissions(&chunks, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("chmod 0700 {}", chunks.display()))?;
     }
     Ok(())
 }

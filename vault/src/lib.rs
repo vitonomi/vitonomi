@@ -19,5 +19,7 @@ pub mod commands;
 pub mod config;
 pub mod hub_client;
 pub mod identity;
+pub mod p2p;
 pub mod set_hub;
 pub mod state_dir;
+pub mod storage;

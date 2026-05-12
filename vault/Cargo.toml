@@ -25,6 +25,7 @@ vitonomi-core = { path = "../core" }
 
 # Async runtime
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "fs"] }
+async-trait = "0.1"
 
 # HTTP client + WS client
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-manual-roots"] }
@@ -49,6 +50,30 @@ clap = { version = "4", features = ["derive"] }
 directories = "5"
 toml = "0.8"
 futures = "0.3"
+
+# SQLite chunk-metadata index. The chunk bytes themselves live on the
+# filesystem under `<data_dir>/chunks/<aa>/<aa..>.chunk`; SQLite holds
+# (address, owner_user_id, size, created_at_ms, replicated_to_peers).
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+] }
+
+# libp2p direct-dial data plane. Slice 3 ships TCP + Noise + yamux;
+# QUIC + WebTransport land in a later slice. The cbor codec on
+# request-response gives us a typed CBOR round-trip on top of one
+# libp2p stream per request.
+libp2p = { version = "0.56", default-features = false, features = [
+    "tokio",
+    "tcp",
+    "noise",
+    "yamux",
+    "request-response",
+    "cbor",
+    "macros",
+    "identify",
+    "ping",
+] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
