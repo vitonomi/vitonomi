@@ -7,12 +7,15 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context as _};
 use futures::{SinkExt as _, StreamExt as _};
+use libp2p::Multiaddr;
+use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
 
 use vitonomi_core::crypto::pq::ml_dsa_65_sign;
 use vitonomi_core::protocol::wire::vault_bus::{
-    BusFrame, ChainAdvertiseFrame, ChallengeResponseFrame, HeartbeatFrame, HEARTBEAT_INTERVAL_SECS,
+    advertise_addrs_signed_bytes, AdvertiseAddrsFrame, BusFrame, ChainAdvertiseFrame,
+    ChallengeResponseFrame, HeartbeatFrame, HEARTBEAT_INTERVAL_SECS,
 };
 
 use crate::accept::load_enrollment;
@@ -20,6 +23,8 @@ use crate::chain_store::ChainStore;
 use crate::config::VaultConfig;
 use crate::hub_client;
 use crate::identity;
+use crate::p2p::{self, HttpIdentityResolver, P2pNode};
+use crate::storage::SqliteVaultStorage;
 
 /// Cadence at which the vault sends signed `Heartbeat` frames. The
 /// hub considers the vault offline after `idle_timeout_secs()` of
@@ -52,6 +57,24 @@ pub async fn run(cfg: VaultConfig) -> anyhow::Result<()> {
 
     let store = Arc::new(ChainStore::open(&cfg.paths.data_dir)?);
 
+    // ── Spawn libp2p data-plane node ──────────────────────────────
+    let chunk_storage: Arc<dyn vitonomi_core::protocol::vault_storage::VaultStorage> =
+        Arc::new(SqliteVaultStorage::open(&cfg.paths.data_dir).await?);
+    let transport_kp = p2p::load_or_generate_transport_keypair(&cfg.paths.data_dir)?;
+    let pinned_client = hub_client::pinned_http_client(&cfg.hub.cert_fingerprint)?;
+    let resolver = Arc::new(HttpIdentityResolver::new(
+        pinned_client,
+        cfg.hub.url.clone(),
+    ));
+    let listen_addr: Multiaddr = cfg
+        .p2p
+        .listen_addr
+        .parse()
+        .with_context(|| format!("parse p2p.listen_addr `{}`", cfg.p2p.listen_addr))?;
+    let p2p_handle = P2pNode::spawn(transport_kp, listen_addr, chunk_storage, resolver).await?;
+    let multiaddrs_rx = p2p_handle.multiaddrs.clone();
+    tracing::info!("libp2p data-plane spawned; advertising on first WS heartbeat");
+
     let mut backoff = hub_client::RECONNECT_BACKOFF_MIN;
     loop {
         let connect = run_session(
@@ -60,11 +83,14 @@ pub async fn run(cfg: VaultConfig) -> anyhow::Result<()> {
             &id,
             &enrollment,
             store.clone(),
+            multiaddrs_rx.clone(),
         )
         .await;
         match connect {
             Ok(()) => {
                 tracing::info!("vault-bus session ended cleanly");
+                let _ = p2p_handle.shutdown.send(()).await;
+                let _ = p2p_handle.join.await;
                 return Ok(());
             }
             Err(e) => {
@@ -83,6 +109,7 @@ async fn run_session(
     id: &identity::VaultIdentity,
     enrollment: &crate::accept::Enrollment,
     store: Arc<ChainStore>,
+    mut multiaddrs_rx: watch::Receiver<Vec<Multiaddr>>,
 ) -> anyhow::Result<()> {
     let ws_url = ws_url_from_https(hub_url)? + "/v1/vault-bus";
     let mut req = ws_url.into_client_request().context("build ws request")?;
@@ -148,12 +175,46 @@ async fn run_session(
         );
     }
 
-    // 4. Heartbeat loop: send a signed Heartbeat every 30s; drop on
-    //    receive of any Disconnect or Error.
+    // 4. Heartbeat loop. Also fires AdvertiseAddrsFrame whenever the
+    //    libp2p multiaddr watch channel changes (Swarm just bound a
+    //    new listen address, or expired one) so clients discover the
+    //    vault within a fraction of a second of `start`, not after
+    //    the first 30s heartbeat.
     let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            // Fast path: libp2p bound (or unbound) an address. Push
+            // the new set to the hub immediately.
+            changed = multiaddrs_rx.changed() => {
+                if changed.is_err() {
+                    // Sender side dropped — libp2p task died.
+                    return Err(anyhow!("libp2p watch channel closed"));
+                }
+                let addrs_now: Vec<String> =
+                    multiaddrs_rx.borrow().iter().map(|m| m.to_string()).collect();
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+                    .unwrap_or(0);
+                let adv_signed = advertise_addrs_signed_bytes(
+                    &enrollment.vault_id,
+                    &addrs_now,
+                    now_ms,
+                );
+                let adv_sig = ml_dsa_65_sign(&id.secret, &adv_signed)
+                    .map_err(|e| anyhow!("sign advertise: {e}"))?;
+                send_frame(
+                    &mut socket,
+                    &BusFrame::AdvertiseAddrs(AdvertiseAddrsFrame {
+                        vault_id: enrollment.vault_id,
+                        multiaddrs: addrs_now,
+                        ts_ms: now_ms,
+                        signature: adv_sig,
+                    }),
+                )
+                .await?;
+            }
             _ = interval.tick() => {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -176,6 +237,34 @@ async fn run_session(
                     highest_seq,
                     head_hash: head_hash.to_vec(),
                 })).await?;
+
+                // Advertise libp2p multiaddrs to the hub. Empty list
+                // on the first tick is fine — Swarm may still be
+                // resolving an address.
+                let addrs_now: Vec<String> = multiaddrs_rx
+                    .borrow()
+                    .iter()
+                    .map(|m| m.to_string())
+                    .collect();
+                if !addrs_now.is_empty() {
+                    let adv_signed = advertise_addrs_signed_bytes(
+                        &enrollment.vault_id,
+                        &addrs_now,
+                        now_ms,
+                    );
+                    let adv_sig = ml_dsa_65_sign(&id.secret, &adv_signed)
+                        .map_err(|e| anyhow!("sign advertise: {e}"))?;
+                    send_frame(
+                        &mut socket,
+                        &BusFrame::AdvertiseAddrs(AdvertiseAddrsFrame {
+                            vault_id: enrollment.vault_id,
+                            multiaddrs: addrs_now,
+                            ts_ms: now_ms,
+                            signature: adv_sig,
+                        }),
+                    )
+                    .await?;
+                }
             }
             msg = socket.next() => {
                 match msg {
@@ -350,6 +439,7 @@ fn kind(f: &BusFrame) -> &'static str {
         BusFrame::Heartbeat(_) => "Heartbeat",
         BusFrame::ChainAppend(_) => "ChainAppend",
         BusFrame::ChainAdvertise(_) => "ChainAdvertise",
+        BusFrame::AdvertiseAddrs(_) => "AdvertiseAddrs",
         BusFrame::Error(_) => "Error",
         BusFrame::Disconnect(_) => "Disconnect",
     }

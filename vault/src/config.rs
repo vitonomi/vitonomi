@@ -20,6 +20,32 @@ pub struct VaultConfig {
     pub hub: HubConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub p2p: P2pConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct P2pConfig {
+    /// libp2p listen multiaddr. Default: `/ip4/0.0.0.0/tcp/0` —
+    /// bind any IPv4 address, kernel-assigned ephemeral port (the
+    /// vault advertises the resolved external addrs to the hub via
+    /// `AdvertiseAddrsFrame` on every WS heartbeat). Set to a fixed
+    /// port for stable address pinning, or to `/ip4/127.0.0.1/tcp/0`
+    /// for tests.
+    #[serde(default = "default_p2p_listen")]
+    pub listen_addr: String,
+}
+
+impl Default for P2pConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: default_p2p_listen(),
+        }
+    }
+}
+
+fn default_p2p_listen() -> String {
+    "/ip4/0.0.0.0/tcp/0".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

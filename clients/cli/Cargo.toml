@@ -50,7 +50,24 @@ sha2 = "0.10"
 hex = "0.4"
 zeroize = "1"
 
+async-trait = "0.1"
+
+# libp2p client. Same stack as the vault server side (TCP + Noise +
+# yamux + request-response cbor). Slice 3 ships TCP only; QUIC +
+# WebTransport land in a later slice.
+libp2p = { version = "0.56", default-features = false, features = [
+    "tokio",
+    "tcp",
+    "noise",
+    "yamux",
+    "request-response",
+    "cbor",
+    "macros",
+] }
+futures = "0.3"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
 vitonomi-hub = { path = "../../hub" }
+vitonomi-vault = { path = "../../vault" }

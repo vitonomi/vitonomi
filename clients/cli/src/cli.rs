@@ -41,6 +41,61 @@ pub enum Command {
     Status,
     /// Vault directory + invite operations.
     Vault(VaultCmd),
+    /// Record put / get / list / delete via the libp2p data plane.
+    Record(RecordCmd),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct RecordCmd {
+    #[command(subcommand)]
+    pub action: RecordAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RecordAction {
+    /// Upload a file as a new record of the given type.
+    Put {
+        #[arg(value_enum)]
+        rt: RecordTypeArg,
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+    /// Download a record by id; defaults to stdout.
+    Get {
+        #[arg(value_enum)]
+        rt: RecordTypeArg,
+        id: String,
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+    /// List every record of the given type.
+    List {
+        #[arg(value_enum)]
+        rt: RecordTypeArg,
+    },
+    /// Tombstone a record by id.
+    Delete {
+        #[arg(value_enum)]
+        rt: RecordTypeArg,
+        id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum RecordTypeArg {
+    Credential,
+    Alias,
+    AliasMessage,
+}
+
+impl RecordTypeArg {
+    fn to_core(self) -> vitonomi_core::record::RecordType {
+        match self {
+            Self::Credential => vitonomi_core::record::RecordType::Credential,
+            Self::Alias => vitonomi_core::record::RecordType::Alias,
+            Self::AliasMessage => vitonomi_core::record::RecordType::AliasMessage,
+        }
+    }
 }
 
 #[derive(Debug, clap::Args)]
@@ -218,6 +273,61 @@ where
                 commands::vault_list::run(&cfg, &state_path).await
             }
         },
+        Command::Record(r) => {
+            let cfg = CliConfig::load(Some(&config_path))?;
+            let state_path = state::resolve_state_path(state_dir_from_cfg(&cfg).as_deref())?;
+            let mut prompts = InteractivePrompts;
+            match r.action {
+                RecordAction::Put { rt, file } => {
+                    commands::record_put::run(
+                        &cfg,
+                        commands::record_put::RecordPutArgs {
+                            state_path: &state_path,
+                            record_type: rt.to_core(),
+                            file,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                RecordAction::Get { rt, id, out } => {
+                    commands::record_get::run(
+                        &cfg,
+                        commands::record_get::RecordGetArgs {
+                            state_path: &state_path,
+                            record_type: rt.to_core(),
+                            id_hex: id,
+                            out,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                RecordAction::List { rt } => {
+                    commands::record_list::run(
+                        &cfg,
+                        commands::record_list::RecordListArgs {
+                            state_path: &state_path,
+                            record_type: rt.to_core(),
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                RecordAction::Delete { rt, id } => {
+                    commands::record_delete::run(
+                        &cfg,
+                        commands::record_delete::RecordDeleteArgs {
+                            state_path: &state_path,
+                            record_type: rt.to_core(),
+                            id_hex: id,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+            }
+        }
     }
 }
 

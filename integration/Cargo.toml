@@ -20,6 +20,14 @@ path = "src/lib.rs"
 name = "mini_mvp"
 path = "tests/mini_mvp.rs"
 
+[[test]]
+name = "record_put_get_libp2p"
+path = "tests/record_put_get_libp2p.rs"
+
+[[test]]
+name = "daemon_cli_record_roundtrip"
+path = "tests/daemon_cli_record_roundtrip.rs"
+
 [dev-dependencies]
 vitonomi-core = { path = "../core" }
 vitonomi-hub = { path = "../hub" }
@@ -31,3 +39,14 @@ tempfile = "3"
 serde_json = "1"
 sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+async-trait = "0.1"
+libp2p = { version = "0.56", default-features = false, features = [
+    "tokio",
+    "tcp",
+    "noise",
+    "yamux",
+    "request-response",
+    "cbor",
+    "macros",
+] }
+anyhow = "1"
