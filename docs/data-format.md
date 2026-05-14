@@ -23,9 +23,9 @@ implementation phases:
   table + key blob V1 + seed phrase + invite token + admin chain
   entry.
 - v0.2 (data-plane slice 1, 2026-05-12): key blob V2 with
-  `user_aead_master` + RecordType discriminator + RecordFrame +
-  Snapshot envelope (3 layers) + Head pointer envelope (3 layers)
-  + `backup_targets` enumeration.
+  `user_aead_master` + RecordType discriminator + RecordFrame
+  (metadata + body split) + Snapshot envelope (3 layers) + Head
+  pointer envelope (3 layers) + `backup_targets` enumeration.
 - v0.3 (Phase 8): alias-pubkey directory entry.
 
 Sections marked **TBD** are landing in the corresponding phase.
@@ -324,30 +324,183 @@ accept the new value.
 
 ## RecordFrame
 
-Per-record framing inside a snapshot envelope. Carries the DataMap
-for the record's AEAD-encrypted payload plus the op (`put` /
-`delete`) and a monotonic per-record version.
+Per-record framing inside a snapshot envelope. A record has **two
+faces**: a small searchable **metadata face** (always pulled by
+browse / list / search) and an optional larger **body face** (pulled
+lazily when the user opens the record). The frame carries the
+metadata face either inline (small records — typical for credentials
+and aliases) or as a DataMap pointer to a separately-sealed metadata
+blob (when metadata exceeds the inline threshold), plus an optional
+DataMap for the body.
 
 ```text
 RecordFrame {
-  record_id:           bytes(16),       // random per-record id
-  op_tag:              uint8,            // 0x01 = Put, 0x02 = Delete
-  payload_data_map:    optional bytes(var),
-                                         // present iff op_tag == 0x01;
-                                         // upstream self_encryption DataMap
-                                         // bytes (bincode-encoded)
-  prev_record_version: uint64,           // strictly monotonic per record_id
+  record_id:            bytes(16),       // random per-record id
+  op_tag:               uint8,            // 0x01 = Put, 0x02 = Delete
+  metadata:             optional MetadataField,
+                                          // present iff op_tag == 0x01
+  body_data_map:        optional bytes(var),
+                                          // present iff op_tag == 0x01 AND
+                                          //   the record has a body face;
+                                          //   upstream self_encryption DataMap
+                                          //   bytes (bincode-encoded)
+  prev_record_version:  uint64,            // strictly monotonic per record_id
+}
+
+MetadataField (CBOR-tagged union; exactly one variant):
+  Inline { bytes: bytes(var) }            // tag 0x01;
+                                          //   deterministic-CBOR plaintext of the
+                                          //   per-RecordType metadata schema;
+                                          //   length ≤ 512 bytes after encoding
+  Blob   { data_map: bytes(var) }         // tag 0x02;
+                                          //   self_encryption DataMap pointing
+                                          //   to a sealed metadata blob
+```
+
+### The two faces
+
+The **metadata face** holds the searchable / browseable fields the
+client needs without unlocking the record:
+
+- `Credential`: title, url, username, tags, folder, `has_totp`,
+  `updated_at_ms`. **No password, no TOTP secret, no notes.**
+- `Alias`: handle, label, domain, `last_used_at`.
+- `AliasMessage`: from, subject, date, snippet, `has_attachments`.
+- `Photo` (v1.1+): `taken_at`, w, h, `geo?`, tags, thumbnail DataMap.
+
+The **body face** holds the secret / heavy data: credential
+password + TOTP secret + notes + custom fields; the photo image
+bytes; the email body + attachments. A record without a body face
+(e.g. a public alias entry whose fields all fit in metadata) sets
+`body_data_map` absent.
+
+Per-RecordType metadata + body schemas live at
+`core::types::*Metadata` and `core::types::*Body`. Schema evolution
+is per-type — bumping a `Credential` schema does not force a
+`Photo` schema bump.
+
+### Inline vs blob metadata
+
+- **Inline metadata** rides directly inside the signed snapshot
+  envelope; no separate sealing step. It is protected by the
+  snapshot's Layer-2 AEAD (see "Snapshot envelope" below). The
+  512-byte CBOR-encoded ceiling keeps cumulative-frame snapshots
+  compact: browsing and search become one fetch + one decrypt, no
+  per-record blob round-trips.
+- **Blob metadata** is for records whose metadata legitimately
+  exceeds the inline threshold (photos with EXIF + thumbnail
+  references; long email snippets). It is sealed under the
+  per-(user, record_type) AEAD key with AAD
+
+  ```text
+  b"vitonomi/record_metadata/v1" || user_id(16) || record_type(1) || record_id(16)
+  ```
+
+  then self-encrypted; the frame stores the resulting DataMap.
+
+A writer SHOULD prefer inline whenever the encoded metadata fits;
+a reader MUST accept either variant on any record.
+
+### Body sealing
+
+The body face is sealed under the per-(user, record_type) AEAD key
+with AAD
+
+```text
+b"vitonomi/record_body/v1" || user_id(16) || record_type(1) || record_id(16)
+```
+
+then self-encrypted; the frame stores the resulting DataMap. Body
+and metadata-blob share the same key but their AAD prefixes differ,
+so a ciphertext is cryptographically bound to its face and to its
+record — a malicious vault cannot substitute one face for another
+or cross records.
+
+Why same key + different AAD instead of separate sub-keys: keeps
+the key schedule unchanged from the Key blob V2 design and relies
+on the AEAD's AAD-binding for face isolation (standard pattern).
+Sub-key derivation can be added later without a wire change if the
+threat model demands it.
+
+### Cumulative-frames model
+
+Every snapshot carries the latest frame per `record_id` for that
+`record_type`. Compaction (truncating old frames into a fresh
+genesis snapshot) is a v1.1 follow-up.
+
+## Per-RecordType payload schemas
+
+Each RecordType defines a `<Type>Metadata` and (optional)
+`<Type>Body` CBOR schema. The metadata-face bytes are the value
+referenced by [`MetadataField::Inline`] (when ≤ 512 B) or the
+plaintext sealed into a [`MetadataField::Blob`] (when larger). The
+body-face bytes are the plaintext sealed under
+[`record_body_aad`] before self-encryption.
+
+### `CredentialMetadata` (RecordType `0x01`, MVP / Phase 6)
+
+```text
+CredentialMetadata {
+  format_version:  uint8 = 1,
+  title:           string,
+  url:             optional string,
+  username:        optional string,
+  tags:            string[],
+  folder:          optional string,
+  has_totp:        bool,
+  created_at_ms:   uint64,
+  updated_at_ms:   uint64,
 }
 ```
 
-The cumulative-frames model: every snapshot carries the latest frame
-per `record_id` for that `record_type`. Compaction (truncating old
-frames into a fresh genesis snapshot) is a v1.1 follow-up.
+CBOR-encoded form is the value carried inside the RecordFrame.
+Typical inputs (title 64 chars, URL 128, username 64, 4 tags,
+folder 32) encode well under the 512 B inline ceiling — verified
+by a property test in `core::types::credential::tests`. Larger
+metadata (rare for credentials) automatically falls back to the
+Blob variant.
+
+**No secret material may be added to this schema**: passwords,
+TOTP secrets, notes, and custom fields live on
+`CredentialBody`. A regression test
+(`metadata_json_keys_contain_no_secret_field_names`) rejects any
+field whose lowercase name matches `password|totp|secret|notes|
+private_key|passwd|pass`.
+
+### `CredentialBody` (RecordType `0x01`)
+
+```text
+CredentialBody {
+  format_version:  uint8 = 1,
+  password:        SecretString,           // zeroized on drop
+  totp:            optional TotpConfig,
+  notes:           optional string,
+  custom_fields:   (string, SecretString)[],
+}
+
+TotpConfig {
+  secret:       SecretBytes,               // raw bytes; base32 lives at the import/export edge
+  algorithm:    uint8,                     // 0 = SHA1, 1 = SHA256, 2 = SHA512 (CBOR-tagged enum)
+  digits:       uint8,                     // RFC 6238: 6, 7, or 8
+  period_secs:  uint32,                    // RFC 6238 default: 30
+}
+```
+
+Sealed under [`record_body_aad`] then self-encrypted; the
+RecordFrame stores the resulting DataMap as `body_data_map`.
 
 ## Snapshot envelope
 
 Three nested layers — the chain head, the AEAD envelope, and the
 self-encryption chunking.
+
+The snapshot envelope protects the **frame list and any inline
+metadata**. Blob-metadata and body ciphertexts referenced by
+frames are sealed separately (see "RecordFrame" above) and live as
+content-addressed chunks in the vault chunk store; the snapshot
+only carries their DataMaps. So a single snapshot decrypt yields
+every record's searchable face for that RecordType — no per-record
+blob fetches are needed to browse or search.
 
 ### Layer 1 — `Snapshot` plaintext (signed)
 
@@ -710,7 +863,9 @@ vector. CI runs the round-trip on every commit.
 | Admin chain entry      | `vectors/admin-chain/`  | TBD (will land with hub binary, Step 3) |
 | Chunk format           | `vectors/chunk/`        | Delegated to upstream                 |
 | DataMap                | `vectors/data-map/`     | Delegated to upstream                 |
-| RecordFrame            | `vectors/record-frame/` | TBD (Phase 5)                         |
+| RecordFrame            | `vectors/record-frame/` | TBD (Phase 5) — includes Inline and Blob metadata variants |
 | Snapshot envelope      | `vectors/snapshot/`     | TBD (Phase 5)                         |
 | Head pointer           | `vectors/head-pointer/` | TBD (Phase 5)                         |
+| Record metadata blob   | `vectors/record-metadata/` | TBD (Phase 5) — Blob-variant sealing round-trip |
+| Record body            | `vectors/record-body/`  | TBD (Phase 5) — body sealing round-trip |
 | Alias-pubkey directory | `vectors/alias-pubkey/` | TBD (Phase 8)                         |

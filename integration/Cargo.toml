@@ -7,7 +7,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "Top-level integration tests that bind hub + vault + cli together. No production code; the [lib] target is empty."
+description = "Top-level integration tests that bind hub + vault + cli together. The [lib] target exports a shared end-to-end test harness used by every integration test in this crate."
 
 [lints]
 workspace = true
@@ -28,7 +28,11 @@ path = "tests/record_put_get_libp2p.rs"
 name = "daemon_cli_record_roundtrip"
 path = "tests/daemon_cli_record_roundtrip.rs"
 
-[dev-dependencies]
+[[test]]
+name = "credentials_cli_e2e"
+path = "tests/credentials_cli_e2e.rs"
+
+[dependencies]
 vitonomi-core = { path = "../core" }
 vitonomi-hub = { path = "../hub" }
 vitonomi-vault = { path = "../vault" }

@@ -285,24 +285,54 @@ vitonomi infrastructure reachable.
 
 ## Data lifecycle (executive summary)
 
+Every record has **two faces**: a small searchable **metadata
+face** (always pulled by browse / list / search) and an optional
+larger **body face** (fetched lazily when the user opens the
+record). The cumulative-frames snapshot per RecordType carries
+metadata inline (when small) or as a DataMap pointer, plus a body
+DataMap pointer when the record has a body. This is what lets
+clients build a unified search index by pulling metadata only —
+no body chunks are downloaded until a user actually opens a
+record. See [`data-format.md#recordframe`](data-format.md) for the
+byte-level split.
+
+### Writing a record
+
 1. **Plaintext on client.** A record (credential, alias config,
-   alias message) is built per the schema in
-   [`record-types.md`](record-types.md).
-2. **AEAD-encrypt with user key.** XChaCha20-Poly1305 with random
-   nonce, key derived from password via Argon2id (dual-salt).
-3. **Self-encrypt.** Run the AEAD ciphertext through the upstream
-   `@autonomi/self-encryption` library to get N encrypted chunks
-   plus a DataMap. The DataMap is the secret needed to reassemble
-   and decrypt; the chunks are content-addressed.
+   alias message, …) is built per the per-RecordType schemas in
+   [`record-types.md`](record-types.md) — a `{metadata, body}`
+   pair where the body is optional.
+2. **Seal each face.** Metadata and body are AEAD-sealed
+   independently under the per-(user, record_type) key with
+   distinct AAD prefixes (`vitonomi/record_metadata/v1`,
+   `vitonomi/record_body/v1`) so a ciphertext is cryptographically
+   bound to its face and its `record_id`. Argon2id-derived keys
+   are unchanged from the master-key path.
+3. **Self-encrypt the non-inline faces.** Metadata bytes that
+   exceed the inline threshold (and every body) are run through
+   upstream `@autonomi/self-encryption` to produce N encrypted
+   chunks plus a DataMap. Small metadata is inlined directly into
+   the RecordFrame and rides inside the snapshot envelope's AEAD.
 4. **Chunks → vault store.** Each chunk is written to the user's
    main vault (and replicated to peer vaults via libp2p). In v1.1,
    chunks also flow to the Autonomi network.
-5. **DataMap → snapshot → snapshot chain.** The DataMap is wrapped
-   in a RecordFrame and added to a snapshot envelope. The envelope
-   itself is AEAD-encrypted and self-encrypted, producing
-   snapshot-chunks and a snapshot-DataMap. The new head pointer
-   (containing the inline snapshot-DataMap, seq, and signature) is
+5. **DataMaps → RecordFrame → snapshot → snapshot chain.** The
+   RecordFrame carries inline metadata (or a metadata DataMap) and
+   the optional body DataMap. It is folded into the per-RecordType
+   snapshot under the cumulative-frames model. The snapshot is
+   signed, AEAD-encrypted, self-encrypted, and its DataMap is
+   carried in a fresh head pointer; the head pointer is
    AEAD-encrypted and PUT to the hub.
+
+### Reading a record
+
+Browsing and searching decrypt **only** the per-RecordType
+snapshot, yielding every record's metadata face for that type in a
+single pass. The cross-type search index (`core::search::LibraryIndex`)
+is built by merging the metadata streams of the loaded RecordTypes —
+it never touches body chunks. When the user opens a specific
+record, the client fetches that one record's body chunks via the
+RecordFrame's `body_data_map` and AEAD-opens it locally.
 
 Reading reverses the same steps.
 [`encryption-flows.md`](encryption-flows.md) has the full per-action

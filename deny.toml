@@ -91,6 +91,14 @@ name = "sha2"
 wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
 
 [[bans.deny]]
+name = "sha1"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
+
+[[bans.deny]]
+name = "hmac"
+wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
+
+[[bans.deny]]
 name = "bip39"
 wrappers = ["vitonomi-core", "vitonomi-core-wasm"]
 

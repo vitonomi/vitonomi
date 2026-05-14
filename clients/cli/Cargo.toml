@@ -50,6 +50,14 @@ sha2 = "0.10"
 hex = "0.4"
 zeroize = "1"
 
+# Cross-platform clipboard for `credential copy`. On headless hosts
+# (CI, SSH session, no display server) `arboard` errors at construct
+# time and the command falls back to printing the secret to stdout.
+arboard = "3"
+
+# Human-readable durations for `--auto-clear 30s` and similar.
+humantime = "2"
+
 async-trait = "0.1"
 
 # libp2p client. Same stack as the vault server side (TCP + Noise +

@@ -33,6 +33,9 @@ base64 = "0.22"
 hex = "0.4"
 subtle = "2.6"
 
+# Unicode-NFC normalisation for the cross-type search tokenizer.
+unicode-normalization = "0.1"
+
 # Secret hygiene
 zeroize = { version = "1.8", features = ["derive"] }
 
@@ -42,6 +45,11 @@ getrandom = { version = "0.2", features = ["std"] }
 # Hashing + KDF
 sha2 = "0.10"
 hkdf = "0.12"
+# RFC 6238 TOTP support — SHA-1 default per the RFC, plus SHA-256 /
+# SHA-512 (already pulled via sha2). Restricted to `core` by the
+# deny.toml ban below — non-core crates have no business with SHA-1.
+sha1 = "0.10"
+hmac = "0.12"
 # BLAKE3 — used at the chunk-address boundary so `vault` can verify
 # `blake3(bytes) == address` before storing without pulling in
 # `self_encryption` as a direct dependency.
@@ -72,6 +80,11 @@ rand_core = { version = "0.9", features = ["os_rng"] }
 
 # Mnemonic
 bip39 = "2.1"
+
+# CSV parser for credential importers (1Password / Chrome / KeePassXC).
+csv = "1.3"
+# JSON for the Bitwarden importer + plaintext credential export.
+serde_json = "1"
 
 # Async runtime + traits
 async-trait = "0.1"

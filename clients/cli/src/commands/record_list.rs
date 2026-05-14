@@ -31,24 +31,28 @@ pub async fn run<P: Prompts + ?Sized>(
     let session = record_session::open(cfg, args.state_path, prompts).await?;
     let listed = session
         .record_store
-        .list(args.record_type)
+        .list_metadata(args.record_type)
         .await
         .map_err(|e| anyhow!("list records: {e}"))?;
     if listed.is_empty() {
         eprintln!("(no records of type {:?})", args.record_type);
     } else {
-        for (id, bytes) in &listed {
-            let preview: String = bytes
+        for (id, metadata) in &listed {
+            let preview: String = metadata
                 .iter()
                 .take(PREVIEW_BYTES)
                 .map(|b| format!("{b:02x}"))
                 .collect();
-            let dots = if bytes.len() > PREVIEW_BYTES {
+            let dots = if metadata.len() > PREVIEW_BYTES {
                 "…"
             } else {
                 ""
             };
-            println!("{}  {} bytes  {preview}{dots}", id.to_hex(), bytes.len());
+            println!(
+                "{}  {} bytes metadata  {preview}{dots}",
+                id.to_hex(),
+                metadata.len()
+            );
         }
     }
     session.shutdown().await;

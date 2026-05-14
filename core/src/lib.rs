@@ -9,12 +9,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod credentials;
 pub mod crypto;
 pub mod encoding;
 pub mod errors;
 pub mod logging;
 pub mod protocol;
 pub mod record;
+pub mod search;
+pub mod totp;
 pub mod types;
 
 pub use errors::{

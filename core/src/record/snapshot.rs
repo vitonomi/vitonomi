@@ -25,16 +25,26 @@ use crate::crypto::selfencrypt::DataMap;
 use crate::encoding::cbor_to_vec;
 use crate::errors::CryptoError;
 use crate::protocol::autonomi_bridge::ChunkAddress;
-use crate::record::{BackupTarget, RecordId, RecordType};
+use crate::record::{BackupTarget, MetadataField, RecordId, RecordType};
 use crate::types::FormatVersion;
 
 /// What happened to a record in this snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "op")]
 pub enum RecordOp {
-    /// New value (insert or update). Payload chunks fetched via
-    /// `payload_data_map`.
-    Put { payload_data_map: DataMap },
+    /// New value (insert or update). Carries the record's metadata
+    /// face (inline or by DataMap) and an optional `body_data_map`
+    /// pointing at the separately-sealed body face. Records without
+    /// a body face omit `body_data_map`.
+    Put {
+        /// The record's searchable metadata face. See
+        /// [`crate::record::MetadataField`].
+        metadata: MetadataField,
+        /// DataMap pointing to the chunks of the AEAD-sealed body
+        /// face, or `None` for records without a body. Sealed under
+        /// AAD built by [`crate::record::record_body_aad`].
+        body_data_map: Option<DataMap>,
+    },
     /// Tombstone. The record is gone after this seq.
     Delete,
 }
@@ -140,7 +150,10 @@ mod tests {
             frames: vec![RecordFrame {
                 record_id: RecordId([1u8; 16]),
                 op: RecordOp::Put {
-                    payload_data_map: DataMap(vec![0xaa, 0xbb]),
+                    metadata: MetadataField::Inline {
+                        bytes: b"sample-metadata".to_vec(),
+                    },
+                    body_data_map: Some(DataMap(vec![0xaa, 0xbb])),
                 },
                 prev_record_version: 0,
             }],

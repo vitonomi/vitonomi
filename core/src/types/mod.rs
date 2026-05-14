@@ -1,4 +1,9 @@
-//! Shared branded primitives used across vitonomi.
+//! Shared branded primitives + per-RecordType data schemas.
+//!
+//! Primitives (`FormatVersion`, `ClusterId`, `UserId`, `VaultId`,
+//! `SessionToken`, `Username`) live here. Per-RecordType `*Metadata`
+//! / `*Body` schemas live in submodules (`credential`, …) — see
+//! `docs/record-types.md`.
 
 use std::fmt;
 use std::str::FromStr;
@@ -6,6 +11,8 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::ValidationError;
+
+pub mod credential;
 
 /// Wire-format version. Carried in every top-level envelope so readers
 /// reject mismatched-version bytes with a typed error.

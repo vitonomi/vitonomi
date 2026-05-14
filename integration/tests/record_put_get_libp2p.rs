@@ -21,7 +21,7 @@ use vitonomi_cli::p2p::{dial_vault, load_or_generate_libp2p_key, Libp2pChunkTran
 
 use vitonomi_core::crypto::keys::MasterKeys;
 use vitonomi_core::crypto::pq::MlDsa65PublicKey;
-use vitonomi_core::record::record_store::{RecordStore, UserKeys};
+use vitonomi_core::record::record_store::{BodyOp, RecordPlaintext, RecordStore, UserKeys};
 use vitonomi_core::record::user_keys::derive_user_aead_master;
 use vitonomi_core::record::RecordType;
 use vitonomi_core::types::{ClusterId, UserId};
@@ -131,27 +131,42 @@ async fn put_get_round_trip_via_libp2p() {
     let head_store = LocalHeadStore::new(cli_dir.path()).unwrap();
     let record_store = RecordStore::new(user_keys, chunk_transport, head_store);
 
-    // ── Round-trip: put → get ───────────────────────────────────
-    let plaintext = b"credential payload: pw=hunter2";
+    // ── Round-trip: put (metadata + body) → list_metadata + get_body ───
+    let metadata_bytes = b"title=netflix";
+    let body_bytes = b"pw=hunter2";
     let id = record_store
-        .put(RecordType::Credential, plaintext)
+        .put(
+            RecordType::Credential,
+            RecordPlaintext {
+                metadata: metadata_bytes.to_vec(),
+                body: BodyOp::Set(body_bytes.to_vec()),
+            },
+        )
         .await
         .expect("put credential");
-    let got = record_store
-        .get(RecordType::Credential, id)
-        .await
-        .expect("get credential")
-        .expect("present");
-    assert_eq!(got, plaintext, "round-trip plaintext must match");
 
-    // List returns the one record.
-    let listed = record_store
-        .list(RecordType::Credential)
+    let got_metadata = record_store
+        .get_metadata(RecordType::Credential, id)
         .await
-        .expect("list");
+        .expect("get metadata")
+        .expect("metadata present");
+    assert_eq!(got_metadata, metadata_bytes, "metadata round-trip");
+
+    let got_body = record_store
+        .get_body(RecordType::Credential, id)
+        .await
+        .expect("get body")
+        .expect("body present");
+    assert_eq!(got_body, body_bytes, "body round-trip");
+
+    // List returns the one record's metadata.
+    let listed = record_store
+        .list_metadata(RecordType::Credential)
+        .await
+        .expect("list_metadata");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].0, id);
-    assert_eq!(listed[0].1.as_slice(), plaintext);
+    assert_eq!(listed[0].1.as_slice(), metadata_bytes);
 
     // ── Shutdown ────────────────────────────────────────────────
     if let Ok(handle) = Arc::try_unwrap(client_handle) {
@@ -197,16 +212,28 @@ async fn put_then_delete_via_libp2p() {
     let record_store = RecordStore::new(user_keys, chunk_transport, head_store);
 
     let a = record_store
-        .put(RecordType::Credential, b"first")
+        .put(
+            RecordType::Credential,
+            RecordPlaintext {
+                metadata: b"first".to_vec(),
+                body: BodyOp::Remove,
+            },
+        )
         .await
         .unwrap();
     let _b = record_store
-        .put(RecordType::Credential, b"second")
+        .put(
+            RecordType::Credential,
+            RecordPlaintext {
+                metadata: b"second".to_vec(),
+                body: BodyOp::Remove,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
         record_store
-            .list(RecordType::Credential)
+            .list_metadata(RecordType::Credential)
             .await
             .unwrap()
             .len(),
@@ -216,7 +243,10 @@ async fn put_then_delete_via_libp2p() {
         .delete(RecordType::Credential, a)
         .await
         .unwrap();
-    let after = record_store.list(RecordType::Credential).await.unwrap();
+    let after = record_store
+        .list_metadata(RecordType::Credential)
+        .await
+        .unwrap();
     assert_eq!(after.len(), 1);
     assert_ne!(after[0].0, a);
 

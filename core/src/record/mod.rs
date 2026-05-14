@@ -8,25 +8,126 @@
 //! is itself AEAD-encrypted and stored on the hub, in IndexedDB,
 //! and in the seed-phrase backup file.
 //!
-//! Encryption pipeline for each record / snapshot:
+//! Each record has **two faces**: a small searchable **metadata
+//! face** (always pulled by browse / list / search) and an optional
+//! larger **body face** (pulled lazily when the user opens the
+//! record). The metadata face rides inline in the snapshot's
+//! RecordFrame whenever the encoded CBOR is ≤ [`INLINE_METADATA_MAX`]
+//! bytes; otherwise it is sealed as a separate blob and the frame
+//! holds a DataMap pointer. The body face is always sealed as a
+//! separate blob (or absent for records whose entire content fits
+//! in the metadata face).
+//!
+//! Encryption pipeline for the inline-metadata case:
 //!
 //! ```text
-//! plaintext ──AEAD(user_record_key)──▶ ciphertext ──self_encryption──▶ chunks + DataMap
+//! signed_snapshot ──AEAD(user_record_key)──▶ ciphertext ──self_encryption──▶ chunks + DataMap
+//! ```
+//!
+//! Encryption pipeline for blob-metadata and body faces:
+//!
+//! ```text
+//! plaintext ──AEAD(user_record_key, face_AAD)──▶ ciphertext ──self_encryption──▶ chunks + DataMap
 //! ```
 //!
 //! The AEAD step uses a per-(user, record_type) key derived from
-//! [`user_keys::derive_record_aead_key`]; this breaks the natural
-//! convergence of self-encryption and prevents confirmation-of-file
-//! attacks.
+//! [`user_keys::derive_record_aead_key`]. The metadata blob and the
+//! body blob share the same key but are bound to distinct
+//! AAD prefixes ([`record_metadata_aad`] vs [`record_body_aad`]) so a
+//! ciphertext is cryptographically tied to its face and to its
+//! `record_id` — a malicious vault cannot substitute one face for
+//! another or cross records.
 
 use serde::{Deserialize, Serialize};
 
+use crate::crypto::selfencrypt::DataMap;
 use crate::errors::ValidationError;
+use crate::types::UserId;
 
 pub mod head_pointer;
 pub mod record_store;
 pub mod snapshot;
 pub mod user_keys;
+
+/// Maximum CBOR-encoded length, in bytes, of a metadata face that
+/// may ride **inline** inside a [`snapshot::RecordFrame`]. Anything
+/// longer is sealed as a separate metadata blob and the frame
+/// stores its DataMap. Inline is the common case: it lets `list` /
+/// `search` stay one-fetch-per-snapshot.
+pub const INLINE_METADATA_MAX: usize = 512;
+
+/// One face of a record carried inside a [`snapshot::RecordFrame`].
+///
+/// `Inline` rides directly in the snapshot envelope (no separate
+/// sealing step); `Blob` references chunks of a separately-sealed
+/// metadata blob via its DataMap. Readers MUST accept either
+/// variant on any record; writers SHOULD prefer `Inline` whenever
+/// the encoded metadata fits within [`INLINE_METADATA_MAX`].
+///
+/// Wire layout — see `docs/data-format.md#recordframe`. CBOR-tagged
+/// union with serde-style internal tagging on the `kind` field:
+/// `{ "kind": "inline", "bytes": <bytes(var)> }` or
+/// `{ "kind": "blob", "data_map": <bytes(var)> }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum MetadataField {
+    /// Encoded metadata bytes carried directly in the RecordFrame.
+    /// Length MUST be ≤ [`INLINE_METADATA_MAX`].
+    Inline {
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    /// DataMap pointing to the chunks of a separately-sealed metadata
+    /// blob. Sealed under the per-(user, record_type) AEAD key with
+    /// AAD built by [`record_metadata_aad`].
+    Blob { data_map: DataMap },
+}
+
+/// AAD prefix used when AEAD-sealing a separately-stored metadata
+/// blob ([`MetadataField::Blob`]). Bound to `(user_id, record_type,
+/// record_id)` so a ciphertext cannot be substituted across records,
+/// across faces, or across users.
+const RECORD_METADATA_AAD_PREFIX: &[u8] = b"vitonomi/record_metadata/v1";
+
+/// AAD prefix used when AEAD-sealing a record body face. Same binding
+/// rules as [`record_metadata_aad`]; the distinct prefix prevents
+/// cross-face substitution under a shared per-(user, record_type)
+/// key.
+const RECORD_BODY_AAD_PREFIX: &[u8] = b"vitonomi/record_body/v1";
+
+/// Build the AAD bytes used when AEAD-sealing a metadata blob.
+///
+/// ```text
+/// b"vitonomi/record_metadata/v1" || user_id(16) || record_type(1) || record_id(16)
+/// ```
+#[must_use]
+pub fn record_metadata_aad(
+    user_id: UserId,
+    record_type: RecordType,
+    record_id: RecordId,
+) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(RECORD_METADATA_AAD_PREFIX.len() + 16 + 1 + 16);
+    aad.extend_from_slice(RECORD_METADATA_AAD_PREFIX);
+    aad.extend_from_slice(&user_id.0);
+    aad.push(record_type.as_u8());
+    aad.extend_from_slice(&record_id.0);
+    aad
+}
+
+/// Build the AAD bytes used when AEAD-sealing a record body face.
+///
+/// ```text
+/// b"vitonomi/record_body/v1" || user_id(16) || record_type(1) || record_id(16)
+/// ```
+#[must_use]
+pub fn record_body_aad(user_id: UserId, record_type: RecordType, record_id: RecordId) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(RECORD_BODY_AAD_PREFIX.len() + 16 + 1 + 16);
+    aad.extend_from_slice(RECORD_BODY_AAD_PREFIX);
+    aad.extend_from_slice(&user_id.0);
+    aad.push(record_type.as_u8());
+    aad.extend_from_slice(&record_id.0);
+    aad
+}
 
 /// Per-record-type discriminator. The u8 byte assignments are
 /// **wire-stable** and documented in `docs/data-format.md` v0.2.
@@ -166,5 +267,55 @@ mod tests {
         let s = id.to_hex();
         assert_eq!(s.len(), 32);
         assert_eq!(RecordId::from_hex(&s).unwrap(), id);
+    }
+
+    #[test]
+    fn metadata_field_inline_round_trip_via_cbor() {
+        let mf = MetadataField::Inline {
+            bytes: b"some metadata".to_vec(),
+        };
+        let cbor = crate::encoding::cbor_to_vec(&mf).unwrap();
+        let back: MetadataField = crate::encoding::cbor_from_slice(&cbor).unwrap();
+        assert_eq!(back, mf);
+    }
+
+    #[test]
+    fn metadata_field_blob_round_trip_via_cbor() {
+        let mf = MetadataField::Blob {
+            data_map: DataMap(vec![1, 2, 3, 4, 5]),
+        };
+        let cbor = crate::encoding::cbor_to_vec(&mf).unwrap();
+        let back: MetadataField = crate::encoding::cbor_from_slice(&cbor).unwrap();
+        assert_eq!(back, mf);
+    }
+
+    #[test]
+    fn metadata_aad_distinct_from_body_aad() {
+        let uid = UserId([1; 16]);
+        let rid = RecordId([2; 16]);
+        let m = record_metadata_aad(uid, RecordType::Credential, rid);
+        let b = record_body_aad(uid, RecordType::Credential, rid);
+        assert_ne!(m, b, "metadata and body AADs must differ for the same record");
+    }
+
+    #[test]
+    fn metadata_aad_distinct_per_user() {
+        let m1 = record_metadata_aad(UserId([1; 16]), RecordType::Credential, RecordId([0; 16]));
+        let m2 = record_metadata_aad(UserId([2; 16]), RecordType::Credential, RecordId([0; 16]));
+        assert_ne!(m1, m2);
+    }
+
+    #[test]
+    fn metadata_aad_distinct_per_record_type() {
+        let m1 = record_metadata_aad(UserId([1; 16]), RecordType::Credential, RecordId([0; 16]));
+        let m2 = record_metadata_aad(UserId([1; 16]), RecordType::Alias, RecordId([0; 16]));
+        assert_ne!(m1, m2);
+    }
+
+    #[test]
+    fn metadata_aad_distinct_per_record_id() {
+        let m1 = record_metadata_aad(UserId([1; 16]), RecordType::Credential, RecordId([7; 16]));
+        let m2 = record_metadata_aad(UserId([1; 16]), RecordType::Credential, RecordId([8; 16]));
+        assert_ne!(m1, m2);
     }
 }

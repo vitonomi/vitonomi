@@ -1,8 +1,21 @@
 //! Subcommand dispatchers.
 
+pub mod clipboard;
 pub mod cluster_create;
 pub mod cluster_restore;
+pub mod credential_add;
+pub mod credential_copy;
+pub mod credential_delete;
+pub mod credential_edit;
+pub mod credential_export;
+pub mod credential_generate;
+pub mod credential_get;
+pub mod credential_import;
+pub mod credential_list;
+pub mod credential_search;
+pub mod credential_totp;
 pub mod init;
+pub mod library_session;
 pub mod local_head_store;
 pub mod login;
 pub mod logout;
@@ -11,6 +24,7 @@ pub mod record_get;
 pub mod record_list;
 pub mod record_put;
 pub mod record_session;
+pub mod search;
 pub mod status;
 pub mod vault_invite;
 pub mod vault_list;
