@@ -51,8 +51,12 @@ pub async fn open<P: Prompts + ?Sized>(
 }
 
 /// RecordTypes that contribute to the cross-type search index.
-/// Phase 7 extends this list when alias indexers land.
 #[must_use]
 pub const fn indexed_types() -> &'static [RecordType] {
-    &[RecordType::Credential]
+    &[
+        RecordType::Credential,
+        RecordType::Alias,
+        RecordType::AliasMessage,
+        RecordType::Domain,
+    ]
 }

@@ -59,5 +59,6 @@ fn record_type_arg_to_core(arg: RecordTypeArg) -> RecordType {
         RecordTypeArg::Credential => RecordType::Credential,
         RecordTypeArg::Alias => RecordType::Alias,
         RecordTypeArg::AliasMessage => RecordType::AliasMessage,
+        RecordTypeArg::Domain => RecordType::Domain,
     }
 }

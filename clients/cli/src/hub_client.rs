@@ -12,9 +12,14 @@ use vitonomi_core::protocol::hub_control_plane::{
     ClusterRegisterRequest, ClusterRegisterResponse, ClusterRestoreRequest,
 };
 use vitonomi_core::protocol::wire::accept::{CreateInviteRequest, CreateInviteResponse};
+use vitonomi_core::protocol::wire::aliases::{AliasDirectoryEntry, InboundEnvelope};
+use vitonomi_core::protocol::wire::domains::{DomainChallenge, DomainRecord, DomainVerified};
 use vitonomi_core::protocol::wire::login::{
     LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse,
 };
+use vitonomi_core::protocol::wire::subdomains::{ManagedBaseDomains, SubdomainDirectoryEntry};
+use vitonomi_core::record::RecordId;
+use vitonomi_core::types::subdomain::{Subdomain, SubdomainClaim};
 use vitonomi_core::types::ClusterId;
 
 /// Default insecure (system-trust-only) HTTP client for hub calls.
@@ -303,4 +308,337 @@ fn hex_lower(bytes: &[u8]) -> String {
         s.push_str(&format!("{b:02x}"));
     }
     s
+}
+
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+// ---------- Phase 7: subdomain / domain / alias / inbox ----------
+
+pub async fn claim_subdomain(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+    claim: &SubdomainClaim,
+) -> Result<()> {
+    let url = format!("{}/v1/subdomains", hub_url.trim_end_matches('/'));
+    client
+        .post(url)
+        .bearer_auth(bearer)
+        .json(claim)
+        .send()
+        .await
+        .context("send /v1/subdomains")?
+        .error_for_status()
+        .context("/v1/subdomains status")?;
+    Ok(())
+}
+
+pub async fn release_subdomain(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+    base: &str,
+    sub: &Subdomain,
+) -> Result<()> {
+    let url = format!(
+        "{}/v1/subdomains/{}/{}",
+        hub_url.trim_end_matches('/'),
+        urlencode(base),
+        urlencode(sub.as_str())
+    );
+    client
+        .delete(url)
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .context("send DELETE /v1/subdomains")?
+        .error_for_status()
+        .context("DELETE /v1/subdomains status")?;
+    Ok(())
+}
+
+pub async fn lookup_subdomain(
+    client: &Client,
+    hub_url: &str,
+    base: &str,
+    sub: &Subdomain,
+) -> Result<SubdomainDirectoryEntry> {
+    let url = format!(
+        "{}/v1/subdomains/{}/{}",
+        hub_url.trim_end_matches('/'),
+        urlencode(base),
+        urlencode(sub.as_str())
+    );
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .context("send GET /v1/subdomains")?
+        .error_for_status()
+        .context("GET /v1/subdomains status")?
+        .json()
+        .await
+        .context("decode SubdomainDirectoryEntry")?;
+    Ok(resp)
+}
+
+pub async fn list_managed_base_domains(
+    client: &Client,
+    hub_url: &str,
+) -> Result<ManagedBaseDomains> {
+    let url = format!("{}/v1/managed-base-domains", hub_url.trim_end_matches('/'));
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .context("send /v1/managed-base-domains")?
+        .error_for_status()
+        .context("/v1/managed-base-domains status")?
+        .json()
+        .await
+        .context("decode ManagedBaseDomains")?;
+    Ok(resp)
+}
+
+#[derive(serde::Serialize)]
+struct AddCustomDomainRequest<'a> {
+    domain: &'a str,
+}
+
+pub async fn add_custom_domain(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+    domain: &str,
+) -> Result<DomainChallenge> {
+    let url = format!("{}/v1/domains", hub_url.trim_end_matches('/'));
+    let resp = client
+        .post(url)
+        .bearer_auth(bearer)
+        .json(&AddCustomDomainRequest { domain })
+        .send()
+        .await
+        .context("send POST /v1/domains")?
+        .error_for_status()
+        .context("POST /v1/domains status")?
+        .json()
+        .await
+        .context("decode DomainChallenge")?;
+    Ok(resp)
+}
+
+pub async fn verify_custom_domain(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+    domain: &str,
+) -> Result<DomainVerified> {
+    let url = format!(
+        "{}/v1/domains/{}/verify",
+        hub_url.trim_end_matches('/'),
+        urlencode(domain)
+    );
+    let resp = client
+        .post(url)
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .context("send POST /v1/domains/_/verify")?
+        .error_for_status()
+        .context("POST /v1/domains/_/verify status")?
+        .json()
+        .await
+        .context("decode DomainVerified")?;
+    Ok(resp)
+}
+
+#[derive(serde::Deserialize)]
+pub struct ListDomainsResponse {
+    pub domains: Vec<DomainRecord>,
+}
+
+pub async fn list_custom_domains(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+) -> Result<ListDomainsResponse> {
+    let url = format!("{}/v1/domains", hub_url.trim_end_matches('/'));
+    let resp = client
+        .get(url)
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .context("send GET /v1/domains")?
+        .error_for_status()
+        .context("GET /v1/domains status")?
+        .json()
+        .await
+        .context("decode ListDomainsResponse")?;
+    Ok(resp)
+}
+
+pub async fn remove_custom_domain(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+    domain: &str,
+) -> Result<()> {
+    let url = format!(
+        "{}/v1/domains/{}",
+        hub_url.trim_end_matches('/'),
+        urlencode(domain)
+    );
+    client
+        .delete(url)
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .context("send DELETE /v1/domains")?
+        .error_for_status()
+        .context("DELETE /v1/domains status")?;
+    Ok(())
+}
+
+pub async fn publish_alias_pubkey(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+    entry: &AliasDirectoryEntry,
+) -> Result<()> {
+    let url = format!("{}/v1/aliases/directory", hub_url.trim_end_matches('/'));
+    client
+        .post(url)
+        .bearer_auth(bearer)
+        .json(entry)
+        .send()
+        .await
+        .context("send POST /v1/aliases/directory")?
+        .error_for_status()
+        .context("POST /v1/aliases/directory status")?;
+    Ok(())
+}
+
+pub async fn lookup_alias_pubkey(
+    client: &Client,
+    hub_url: &str,
+    alias_handle: &str,
+    namespace: &str,
+) -> Result<Option<AliasDirectoryEntry>> {
+    let url = format!(
+        "{}/v1/aliases/directory/{}/{}",
+        hub_url.trim_end_matches('/'),
+        urlencode(alias_handle),
+        urlencode(namespace)
+    );
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .context("send GET /v1/aliases/directory")?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let body: AliasDirectoryEntry = resp
+        .error_for_status()
+        .context("GET /v1/aliases/directory status")?
+        .json()
+        .await
+        .context("decode AliasDirectoryEntry")?;
+    Ok(Some(body))
+}
+
+pub async fn revoke_alias_pubkey(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+    alias_handle: &str,
+    namespace: &str,
+) -> Result<()> {
+    let url = format!(
+        "{}/v1/aliases/directory/{}/{}",
+        hub_url.trim_end_matches('/'),
+        urlencode(alias_handle),
+        urlencode(namespace)
+    );
+    client
+        .delete(url)
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .context("send DELETE /v1/aliases/directory")?
+        .error_for_status()
+        .context("DELETE /v1/aliases/directory status")?;
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+pub struct InboxFetchResponse {
+    pub envelopes: Vec<InboundEnvelope>,
+}
+
+pub async fn fetch_alias_inbox(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+    alias_id: &RecordId,
+    since_seq: u64,
+) -> Result<InboxFetchResponse> {
+    let url = format!(
+        "{}/v1/aliases/{}/inbox?since={}",
+        hub_url.trim_end_matches('/'),
+        hex_lower(&alias_id.0),
+        since_seq
+    );
+    let resp = client
+        .get(url)
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .context("send GET /v1/aliases/_/inbox")?
+        .error_for_status()
+        .context("GET /v1/aliases/_/inbox status")?
+        .json()
+        .await
+        .context("decode InboxFetchResponse")?;
+    Ok(resp)
+}
+
+#[derive(serde::Serialize)]
+struct InboxAckRequest {
+    up_to_seq: u64,
+}
+
+pub async fn ack_alias_inbox(
+    client: &Client,
+    hub_url: &str,
+    bearer: &str,
+    alias_id: &RecordId,
+    up_to_seq: u64,
+) -> Result<()> {
+    let url = format!(
+        "{}/v1/aliases/{}/inbox/ack",
+        hub_url.trim_end_matches('/'),
+        hex_lower(&alias_id.0)
+    );
+    client
+        .post(url)
+        .bearer_auth(bearer)
+        .json(&InboxAckRequest { up_to_seq })
+        .send()
+        .await
+        .context("send POST /v1/aliases/_/inbox/ack")?
+        .error_for_status()
+        .context("POST /v1/aliases/_/inbox/ack status")?;
+    Ok(())
 }

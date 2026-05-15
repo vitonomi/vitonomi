@@ -28,3 +28,20 @@ pub mod search;
 pub mod status;
 pub mod vault_invite;
 pub mod vault_list;
+
+// Phase 7: subdomain / alias / domain commands.
+pub mod alias_create;
+pub mod alias_delete;
+pub mod alias_disable;
+pub mod alias_inbox;
+pub mod alias_list;
+pub mod alias_mark_read;
+pub mod alias_read;
+pub mod alias_search;
+pub mod domain_add;
+pub mod domain_list;
+pub mod domain_remove;
+pub mod domain_verify;
+pub mod subdomain_claim;
+pub mod subdomain_list;
+pub mod subdomain_release;

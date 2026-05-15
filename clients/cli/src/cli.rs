@@ -46,6 +46,13 @@ pub enum Command {
     /// Credential operations (typed wrapper around Record + the
     /// per-RecordType `CredentialMetadata`/`CredentialBody` schemas).
     Credential(CredentialCmd),
+    /// Subdomain (managed-base) claim / release / list. Phase 7.
+    Subdomain(SubdomainCmd),
+    /// Email alias create / list / disable / delete + inbox poll +
+    /// per-message read / mark-read / search. Phase 7.
+    Alias(AliasCmd),
+    /// Custom-domain (BYO) add / verify / list / remove. Phase 7.
+    Domain(DomainCmd),
     /// Cross-RecordType universal search.
     Search {
         query: String,
@@ -258,6 +265,7 @@ pub enum RecordTypeArg {
     Credential,
     Alias,
     AliasMessage,
+    Domain,
 }
 
 impl RecordTypeArg {
@@ -266,8 +274,116 @@ impl RecordTypeArg {
             Self::Credential => vitonomi_core::record::RecordType::Credential,
             Self::Alias => vitonomi_core::record::RecordType::Alias,
             Self::AliasMessage => vitonomi_core::record::RecordType::AliasMessage,
+            Self::Domain => vitonomi_core::record::RecordType::Domain,
         }
     }
+}
+
+#[derive(Debug, clap::Args)]
+pub struct SubdomainCmd {
+    #[command(subcommand)]
+    pub action: SubdomainAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SubdomainAction {
+    /// Claim a subdomain under a managed base. Client-side enforces
+    /// `subdomain != username`; the request never leaves the device
+    /// on collision.
+    Claim {
+        /// The subdomain (local part), e.g. `inbox-demo`.
+        name: String,
+        /// Base domain to claim under (e.g. `vito.gg`).
+        #[arg(long)]
+        domain: String,
+    },
+    /// Release a previously-claimed subdomain. Aliases under the
+    /// subdomain are tombstoned by the hub.
+    Release {
+        name: String,
+        #[arg(long)]
+        domain: String,
+    },
+    /// List the subdomains the current cluster has claimed.
+    List,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AliasCmd {
+    #[command(subcommand)]
+    pub action: AliasAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AliasAction {
+    /// Create a new alias. Address syntax: `<handle>@<namespace>`.
+    /// `<namespace>` MUST be a claimed subdomain or a verified
+    /// custom domain owned by this cluster.
+    Create {
+        /// Full email address, e.g. `netflix@inbox-demo.vito.gg`.
+        address: String,
+        /// Optional human-readable label.
+        #[arg(long)]
+        label: Option<String>,
+        /// Comma-separated tags.
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+    },
+    /// List every alias the cluster owns. Metadata-only.
+    List,
+    /// Disable an alias (keeps the directory entry but flips
+    /// `active=false` so the relay silent-drops new mail).
+    Disable { id: String },
+    /// Tombstone an alias entirely. The hub revokes the directory
+    /// entry; queued envelopes are GC'd.
+    Delete { id: String },
+    /// Poll the per-alias inbound queue and merge new envelopes
+    /// into the local `AliasMessage` snapshot.
+    Inbox {
+        id: String,
+        /// Cursor — `0` to fetch from the beginning.
+        #[arg(long, default_value_t = 0)]
+        since: u64,
+    },
+    /// Read one inbound message — pulls body chunks + AEAD-opens
+    /// + prints to stdout.
+    Read {
+        alias_id: String,
+        message_id: String,
+    },
+    /// Mark a message as read (moves it past the local high-water
+    /// mark; ack the hub up to the message's seq).
+    MarkRead {
+        alias_id: String,
+        message_id: String,
+    },
+    /// Search inside the cluster's alias + alias-message records.
+    Search {
+        query: String,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DomainCmd {
+    #[command(subcommand)]
+    pub action: DomainAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DomainAction {
+    /// Add a custom domain (BYO). Hub returns the TXT + MX records
+    /// the user must publish at their DNS provider.
+    Add { domain: String },
+    /// Trigger DNS verification. Hub re-resolves the TXT and MX
+    /// records and flips status to `Verified` if they match.
+    Verify { domain: String },
+    /// List the user's custom domains.
+    List,
+    /// Remove a custom domain. Aliases under the domain are
+    /// tombstoned.
+    Remove { domain: String },
 }
 
 #[derive(Debug, clap::Args)]
@@ -664,6 +780,200 @@ where
                             force_plain,
                         },
                         &mut prompts,
+                    )
+                    .await
+                }
+            }
+        }
+        Command::Subdomain(s) => {
+            let cfg = CliConfig::load(Some(&config_path))?;
+            let state_path = state::resolve_state_path(state_dir_from_cfg(&cfg).as_deref())?;
+            let mut prompts = InteractivePrompts;
+            match s.action {
+                SubdomainAction::Claim { name, domain } => {
+                    commands::subdomain_claim::run(
+                        &cfg,
+                        commands::subdomain_claim::SubdomainClaimArgs {
+                            state_path: &state_path,
+                            subdomain: name,
+                            base_domain: domain,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                SubdomainAction::Release { name, domain } => {
+                    commands::subdomain_release::run(
+                        &cfg,
+                        commands::subdomain_release::SubdomainReleaseArgs {
+                            state_path: &state_path,
+                            subdomain: name,
+                            base_domain: domain,
+                        },
+                    )
+                    .await
+                }
+                SubdomainAction::List => {
+                    commands::subdomain_list::run(
+                        &cfg,
+                        commands::subdomain_list::SubdomainListArgs {
+                            state_path: &state_path,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+            }
+        }
+        Command::Alias(a) => {
+            let cfg = CliConfig::load(Some(&config_path))?;
+            let state_path = state::resolve_state_path(state_dir_from_cfg(&cfg).as_deref())?;
+            let mut prompts = InteractivePrompts;
+            match a.action {
+                AliasAction::Create {
+                    address,
+                    label,
+                    tags,
+                } => {
+                    commands::alias_create::run(
+                        &cfg,
+                        commands::alias_create::AliasCreateArgs {
+                            state_path: &state_path,
+                            address,
+                            label,
+                            tags: tags.unwrap_or_default(),
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                AliasAction::List => {
+                    commands::alias_list::run(
+                        &cfg,
+                        commands::alias_list::AliasListArgs {
+                            state_path: &state_path,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                AliasAction::Disable { id } => {
+                    commands::alias_disable::run(
+                        &cfg,
+                        commands::alias_disable::AliasDisableArgs {
+                            state_path: &state_path,
+                            id_hex: id,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                AliasAction::Delete { id } => {
+                    commands::alias_delete::run(
+                        &cfg,
+                        commands::alias_delete::AliasDeleteArgs {
+                            state_path: &state_path,
+                            id_hex: id,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                AliasAction::Inbox { id, since } => {
+                    commands::alias_inbox::run(
+                        &cfg,
+                        commands::alias_inbox::AliasInboxArgs {
+                            state_path: &state_path,
+                            id_hex: id,
+                            since_seq: since,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                AliasAction::Read {
+                    alias_id,
+                    message_id,
+                } => {
+                    commands::alias_read::run(
+                        &cfg,
+                        commands::alias_read::AliasReadArgs {
+                            state_path: &state_path,
+                            alias_id_hex: alias_id,
+                            message_id_hex: message_id,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+                AliasAction::MarkRead {
+                    alias_id,
+                    message_id,
+                } => {
+                    commands::alias_mark_read::run(
+                        &cfg,
+                        commands::alias_mark_read::AliasMarkReadArgs {
+                            state_path: &state_path,
+                            alias_id_hex: alias_id,
+                            message_id_hex: message_id,
+                        },
+                    )
+                    .await
+                }
+                AliasAction::Search { query, limit } => {
+                    commands::alias_search::run(
+                        &cfg,
+                        commands::alias_search::AliasSearchArgs {
+                            state_path: &state_path,
+                            query,
+                            limit,
+                        },
+                        &mut prompts,
+                    )
+                    .await
+                }
+            }
+        }
+        Command::Domain(d) => {
+            let cfg = CliConfig::load(Some(&config_path))?;
+            let state_path = state::resolve_state_path(state_dir_from_cfg(&cfg).as_deref())?;
+            match d.action {
+                DomainAction::Add { domain } => {
+                    commands::domain_add::run(
+                        &cfg,
+                        commands::domain_add::DomainAddArgs {
+                            state_path: &state_path,
+                            domain,
+                        },
+                    )
+                    .await
+                }
+                DomainAction::Verify { domain } => {
+                    commands::domain_verify::run(
+                        &cfg,
+                        commands::domain_verify::DomainVerifyArgs {
+                            state_path: &state_path,
+                            domain,
+                        },
+                    )
+                    .await
+                }
+                DomainAction::List => {
+                    commands::domain_list::run(
+                        &cfg,
+                        commands::domain_list::DomainListArgs {
+                            state_path: &state_path,
+                        },
+                    )
+                    .await
+                }
+                DomainAction::Remove { domain } => {
+                    commands::domain_remove::run(
+                        &cfg,
+                        commands::domain_remove::DomainRemoveArgs {
+                            state_path: &state_path,
+                            domain,
+                        },
                     )
                     .await
                 }
