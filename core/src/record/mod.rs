@@ -130,16 +130,23 @@ pub fn record_body_aad(user_id: UserId, record_type: RecordType, record_id: Reco
 }
 
 /// Per-record-type discriminator. The u8 byte assignments are
-/// **wire-stable** and documented in `docs/data-format.md` v0.2.
+/// **wire-stable** and documented in `docs/data-format.md` v0.4.
 ///
-/// MVP record types: `Credential`, `Alias`, `AliasMessage`.
-/// Reserved (parse-error in V1 readers): `Photo = 0x10`,
-/// `Note = 0x20`, `File = 0x30`.
+/// MVP record types: `Credential`, `Alias`, `AliasMessage`,
+/// `Domain`. Reserved (parse-error in V1 readers): `Photo = 0x10`,
+/// `Note = 0x20`, `File = 0x30`. Unused bytes in `0x05..=0x0f`
+/// are reserved for future expansion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RecordType {
     Credential,
     Alias,
     AliasMessage,
+    /// Phase 7 Slice 6: namespace ownership records. Both
+    /// `subdomain claim` (under a managed base) and `domain
+    /// add` (custom DNS-verified) write the same `Domain`
+    /// record discriminated by an `is_custom` flag on the
+    /// metadata. See `core::types::domain::DomainMetadata`.
+    Domain,
 }
 
 impl RecordType {
@@ -150,6 +157,7 @@ impl RecordType {
             Self::Credential => 0x01,
             Self::Alias => 0x02,
             Self::AliasMessage => 0x03,
+            Self::Domain => 0x04,
         }
     }
 
@@ -164,6 +172,7 @@ impl RecordType {
             0x01 => Ok(Self::Credential),
             0x02 => Ok(Self::Alias),
             0x03 => Ok(Self::AliasMessage),
+            0x04 => Ok(Self::Domain),
             other => Err(ValidationError::Other(format!(
                 "unknown / reserved RecordType: 0x{other:02x}"
             ))),
@@ -241,6 +250,7 @@ mod tests {
             RecordType::Credential,
             RecordType::Alias,
             RecordType::AliasMessage,
+            RecordType::Domain,
         ] {
             let byte = rt.as_u8();
             assert_eq!(RecordType::from_u8(byte).unwrap(), rt);
@@ -249,7 +259,9 @@ mod tests {
 
     #[test]
     fn record_type_rejects_reserved_bytes() {
-        for byte in [0x00u8, 0x04, 0x10, 0x20, 0x30, 0xff] {
+        // Phase 7 promotes 0x04 to `Domain`. New reserved set:
+        // 0x00, 0x05..=0x0f, 0x10, 0x20, 0x30, 0xff.
+        for byte in [0x00u8, 0x05, 0x0f, 0x10, 0x20, 0x30, 0xff] {
             assert!(RecordType::from_u8(byte).is_err(), "byte {byte:#x}");
         }
     }

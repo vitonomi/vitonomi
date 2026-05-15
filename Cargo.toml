@@ -6,7 +6,7 @@ resolver = "2"
 # fills `core` with real code; later steps add `vault`, `hub`,
 # `clients/cli`, etc. See ../PROJECT.md and ~/.claude/plans/ for the
 # work breakdown.
-members = ["core", "hub", "vault", "clients/cli", "integration"]
+members = ["core", "hub", "mx", "vault", "clients/cli", "integration"]
 exclude = ["clients/web", "clients/mobile", "clients/ext"]
 
 [workspace.package]

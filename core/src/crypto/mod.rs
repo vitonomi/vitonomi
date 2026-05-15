@@ -5,6 +5,7 @@
 
 pub mod admin_chain;
 pub mod aead;
+pub mod alias_inbound;
 pub mod argon2;
 pub mod challenge;
 pub mod cluster;

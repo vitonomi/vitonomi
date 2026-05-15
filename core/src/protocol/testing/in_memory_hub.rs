@@ -20,6 +20,7 @@ use crate::crypto::pq::MlDsa65PublicKey;
 use crate::crypto::random::random_bytes;
 use crate::encoding::{b64url_encode, cbor_to_vec};
 use crate::errors::{AuthError, CoreError, CryptoError};
+use crate::crypto::pq::ml_dsa_65_verify;
 use crate::protocol::hub_control_plane::{
     ClusterRegisterRequest, ClusterRegisterResponse, ClusterRestoreRequest, HubControlPlane,
     VaultRecord, VaultStatus,
@@ -28,10 +29,20 @@ use crate::protocol::wire::accept::{
     invite_outer_signed_bytes, AcceptRequest, AcceptResponse, CreateInviteRequest,
     CreateInviteResponse,
 };
+use crate::protocol::wire::aliases::{AliasDirectoryEntry, InboundEnvelope};
 use crate::protocol::wire::bootstrap::{BootstrapPolicy, BootstrapRequest, BootstrapResponse};
+use crate::protocol::wire::domains::{
+    DomainChallenge, DomainRecord, DomainStatus, DomainVerified,
+};
 use crate::protocol::wire::login::{
     LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse,
 };
+use crate::protocol::wire::relay_push::{
+    RegisterRelayRequest, RegisterRelayResponse, RelayId, RelayPushAck, SignedRelayPush,
+};
+use crate::protocol::wire::subdomains::SubdomainDirectoryEntry;
+use crate::record::RecordId;
+use crate::types::subdomain::{is_reserved_subdomain, Subdomain, SubdomainClaim};
 use crate::types::{ClusterId, FormatVersion, SessionToken, UserId, VaultId};
 
 #[derive(Default)]
@@ -44,6 +55,41 @@ struct HubState {
     /// Open invites — keyed by `invite_nonce`, value is the stored
     /// outer summary. Hub uses these for replay defense + admission.
     invite_outers: HashMap<Vec<u8>, crate::protocol::wire::accept::InviteOuterSummary>,
+    // ── Phase 7 collections ──────────────────────────────────
+    /// `(base_domain, subdomain) → claim record + owner`.
+    /// Tombstoned subdomains live in `tombstoned_subdomains`.
+    subdomains: HashMap<(String, Subdomain), SubdomainSlot>,
+    tombstoned_subdomains: HashMap<(String, Subdomain), u64>,
+    /// `(user_id, domain) → custom-domain record`.
+    custom_domains: HashMap<(UserId, String), CustomDomainSlot>,
+    /// `(alias_handle, namespace) → AliasDirectoryEntry`.
+    alias_directory: HashMap<(String, String), AliasDirectoryEntry>,
+    /// `relay_id → registration`.
+    relay_pubkeys: HashMap<RelayId, RelayRegistration>,
+    /// Per-alias monotonic FIFO of inbound envelopes.
+    inbound_queues: HashMap<RecordId, Vec<InboundEnvelope>>,
+    /// Per-alias high-water mark — the seq the client has acked.
+    inbox_acks: HashMap<RecordId, u64>,
+    /// Per-alias monotonic seq counter, incremented on each push.
+    inbox_seq_counters: HashMap<RecordId, u64>,
+}
+
+struct SubdomainSlot {
+    user_id: UserId,
+    cluster_id: ClusterId,
+    claim: SubdomainClaim,
+    claimed_at_ms: u64,
+}
+
+struct CustomDomainSlot {
+    status: DomainStatus,
+    challenge: [u8; 32],
+    verified_at_ms: Option<u64>,
+}
+
+struct RelayRegistration {
+    pubkey: MlDsa65PublicKey,
+    allowed_namespaces: Vec<String>,
 }
 
 struct ClusterRecord {
@@ -788,6 +834,403 @@ impl HubControlPlane for InMemoryHubControlPlane {
         )?;
         cluster.chain = combined;
         Ok(())
+    }
+
+    // ── Phase 7: subdomains ────────────────────────────────────
+
+    async fn claim_subdomain(
+        &self,
+        session_token: &SessionToken,
+        claim: SubdomainClaim,
+    ) -> Result<(), CoreError> {
+        let mut state = self.state.lock().unwrap();
+        let session = self.lookup_session(&state, session_token)?;
+        let user_id = session.user_id;
+        let cluster_id = session.cluster_id;
+
+        // 1. Reserved-names check.
+        if is_reserved_subdomain(claim.subdomain.as_str()) {
+            return Err(CoreError::Validation(
+                crate::errors::ValidationError::SubdomainReserved(
+                    claim.subdomain.as_str().to_string(),
+                ),
+            ));
+        }
+        // 2. Verify the user signed the claim under the
+        // identity pubkey embedded in it.
+        claim
+            .verify()
+            .map_err(|e| CoreError::Protocol(e))?;
+        // 3. Already-taken under (base, sub).
+        let key = (claim.base_domain.clone(), claim.subdomain.clone());
+        if state.subdomains.contains_key(&key) {
+            return Err(CoreError::Validation(
+                crate::errors::ValidationError::Other(format!(
+                    "subdomain.taken: {}.{}",
+                    claim.subdomain, claim.base_domain
+                )),
+            ));
+        }
+        // 4. One claim per cluster per base.
+        if state
+            .subdomains
+            .values()
+            .any(|s| s.cluster_id == cluster_id && s.claim.base_domain == claim.base_domain)
+        {
+            return Err(CoreError::Validation(
+                crate::errors::ValidationError::Other(format!(
+                    "subdomain.cluster_already_claimed_in_base: {}",
+                    claim.base_domain
+                )),
+            ));
+        }
+        // (No server-side `subdomain == username` check — see
+        // docs/threat-model.md#relaxed_posture.client_side_username_check_only)
+        let now = self.now();
+        state.subdomains.insert(
+            key,
+            SubdomainSlot {
+                user_id,
+                cluster_id,
+                claim,
+                claimed_at_ms: now,
+            },
+        );
+        Ok(())
+    }
+
+    async fn release_subdomain(
+        &self,
+        session_token: &SessionToken,
+        base_domain: &str,
+        subdomain: &Subdomain,
+    ) -> Result<(), CoreError> {
+        let mut state = self.state.lock().unwrap();
+        let session = self.lookup_session(&state, session_token)?;
+        let user_id = session.user_id;
+        let key = (base_domain.to_string(), subdomain.clone());
+        let slot = state.subdomains.get(&key).ok_or_else(|| {
+            CoreError::Validation(crate::errors::ValidationError::Other(format!(
+                "subdomain.not_found: {subdomain}.{base_domain}"
+            )))
+        })?;
+        if slot.user_id != user_id {
+            return Err(CoreError::Auth(AuthError::Forbidden));
+        }
+        let now = self.now();
+        state.subdomains.remove(&key);
+        state.tombstoned_subdomains.insert(key, now);
+        Ok(())
+    }
+
+    async fn lookup_subdomain(
+        &self,
+        base_domain: &str,
+        subdomain: &Subdomain,
+    ) -> Result<SubdomainDirectoryEntry, CoreError> {
+        let state = self.state.lock().unwrap();
+        let key = (base_domain.to_string(), subdomain.clone());
+        let slot = state.subdomains.get(&key).ok_or_else(|| {
+            CoreError::Validation(crate::errors::ValidationError::Other(format!(
+                "subdomain.not_found: {subdomain}.{base_domain}"
+            )))
+        })?;
+        Ok(SubdomainDirectoryEntry {
+            subdomain: slot.claim.subdomain.clone(),
+            base_domain: slot.claim.base_domain.clone(),
+            user_identity_pubkey: slot.claim.user_identity_pubkey.clone(),
+            alias_kem_directory_pointer: format!(
+                "{}.{}",
+                slot.claim.subdomain, slot.claim.base_domain
+            ),
+        })
+    }
+
+    async fn list_managed_base_domains(&self) -> Result<Vec<String>, CoreError> {
+        // The in-memory backend is permissive: every base the
+        // user picks is treated as managed. Hub config in
+        // production will gate this.
+        Ok(vec!["vito.gg".into()])
+    }
+
+    // ── Phase 7: custom domains ────────────────────────────────
+
+    async fn add_custom_domain(
+        &self,
+        session_token: &SessionToken,
+        domain: &str,
+    ) -> Result<DomainChallenge, CoreError> {
+        let mut state = self.state.lock().unwrap();
+        let session = self.lookup_session(&state, session_token)?;
+        let user_id = session.user_id;
+        let key = (user_id, domain.to_string());
+        if state.custom_domains.contains_key(&key) {
+            return Err(CoreError::Validation(
+                crate::errors::ValidationError::Other(format!("domain.already_added: {domain}")),
+            ));
+        }
+        let mut challenge = [0u8; 32];
+        let bytes =
+            random_bytes(32).map_err(|e| CoreError::Crypto(CryptoError::Random(e.to_string())))?;
+        challenge.copy_from_slice(&bytes);
+        state.custom_domains.insert(
+            key,
+            CustomDomainSlot {
+                status: DomainStatus::Pending,
+                challenge,
+                verified_at_ms: None,
+            },
+        );
+        Ok(DomainChallenge {
+            txt_record_value: b64url_encode(&challenge),
+            required_mx_target: "mx.vitonomi.com".into(),
+        })
+    }
+
+    async fn verify_custom_domain(
+        &self,
+        session_token: &SessionToken,
+        domain: &str,
+    ) -> Result<DomainVerified, CoreError> {
+        // The in-memory backend skips real DNS — production code
+        // will inject a `DnsResolver` and resolve `_vitonomi.<d>`
+        // TXT + MX. For now we mark verified unconditionally so
+        // tests can drive the happy path.
+        let mut state = self.state.lock().unwrap();
+        let session = self.lookup_session(&state, session_token)?;
+        let user_id = session.user_id;
+        let key = (user_id, domain.to_string());
+        let slot = state.custom_domains.get_mut(&key).ok_or_else(|| {
+            CoreError::Validation(crate::errors::ValidationError::Other(format!(
+                "domain.not_found: {domain}"
+            )))
+        })?;
+        let now = self.now();
+        slot.status = DomainStatus::Active;
+        slot.verified_at_ms = Some(now);
+        Ok(DomainVerified {
+            domain: domain.to_string(),
+            verified_at_ms: now,
+        })
+    }
+
+    async fn list_custom_domains(
+        &self,
+        session_token: &SessionToken,
+    ) -> Result<Vec<DomainRecord>, CoreError> {
+        let state = self.state.lock().unwrap();
+        let session = self.lookup_session(&state, session_token)?;
+        let user_id = session.user_id;
+        Ok(state
+            .custom_domains
+            .iter()
+            .filter(|((u, _), _)| *u == user_id)
+            .map(|((_, d), s)| DomainRecord {
+                domain: d.clone(),
+                status: s.status,
+                verified_at_ms: s.verified_at_ms,
+            })
+            .collect())
+    }
+
+    async fn remove_custom_domain(
+        &self,
+        session_token: &SessionToken,
+        domain: &str,
+    ) -> Result<(), CoreError> {
+        let mut state = self.state.lock().unwrap();
+        let session = self.lookup_session(&state, session_token)?;
+        let user_id = session.user_id;
+        state.custom_domains.remove(&(user_id, domain.to_string()));
+        Ok(())
+    }
+
+    // ── Phase 7: alias directory ───────────────────────────────
+
+    async fn publish_alias_pubkey(
+        &self,
+        session_token: &SessionToken,
+        entry: AliasDirectoryEntry,
+    ) -> Result<(), CoreError> {
+        let mut state = self.state.lock().unwrap();
+        let session = self.lookup_session(&state, session_token)?;
+        // The session-bound user must own `entry.namespace` —
+        // either they hold a subdomain claim under it, or they
+        // verified it as a custom domain. Skip the deep check
+        // here; production code wires it via the trait
+        // helpers above.
+        let _ = session;
+        // Verify the user's signature over the entry. The
+        // signed bytes are the deterministic CBOR of (alias_handle,
+        // namespace, alias_id, alias_kem_pubkey). Mirrors the
+        // SubdomainClaim verify flow.
+        let signed = (
+            &entry.alias_handle,
+            &entry.namespace,
+            &entry.alias_id,
+            &entry.alias_kem_pubkey,
+        );
+        let msg = cbor_to_vec(&signed).map_err(CoreError::Protocol)?;
+        ml_dsa_65_verify(&entry.user_identity_pubkey, &entry.sig_user, &msg)
+            .map_err(|_| {
+                CoreError::Protocol(crate::errors::ProtocolError::Malformed(
+                    "alias_directory: sig_user invalid".into(),
+                ))
+            })?;
+        let key = (entry.alias_handle.clone(), entry.namespace.clone());
+        state.alias_directory.insert(key, entry);
+        Ok(())
+    }
+
+    async fn lookup_alias_pubkey(
+        &self,
+        alias_handle: &str,
+        namespace: &str,
+    ) -> Result<AliasDirectoryEntry, CoreError> {
+        let state = self.state.lock().unwrap();
+        state
+            .alias_directory
+            .get(&(alias_handle.to_string(), namespace.to_string()))
+            .cloned()
+            .ok_or_else(|| {
+                CoreError::Validation(crate::errors::ValidationError::Other(format!(
+                    "alias_directory.not_found: {alias_handle}@{namespace}"
+                )))
+            })
+    }
+
+    async fn revoke_alias_pubkey(
+        &self,
+        session_token: &SessionToken,
+        alias_handle: &str,
+        namespace: &str,
+    ) -> Result<(), CoreError> {
+        let mut state = self.state.lock().unwrap();
+        let _ = self.lookup_session(&state, session_token)?;
+        state
+            .alias_directory
+            .remove(&(alias_handle.to_string(), namespace.to_string()));
+        Ok(())
+    }
+
+    // ── Phase 7: per-alias inbound queue (shape A) ─────────────
+
+    async fn relay_push_inbound(
+        &self,
+        push: SignedRelayPush,
+    ) -> Result<RelayPushAck, CoreError> {
+        let mut state = self.state.lock().unwrap();
+        // 1. Verify the relay's signature.
+        let registration = state.relay_pubkeys.get(&push.relay_id).ok_or_else(|| {
+            CoreError::Auth(AuthError::Forbidden)
+        })?;
+        let signed = push.signed_bytes().map_err(CoreError::Protocol)?;
+        ml_dsa_65_verify(&registration.pubkey, &push.sig_relay, &signed).map_err(|_| {
+            CoreError::Protocol(crate::errors::ProtocolError::Malformed(
+                "relay_push: sig_relay invalid".into(),
+            ))
+        })?;
+        // 2. Resolve alias from the directory.
+        let (alias_handle, namespace) = &push.alias_directory_lookup;
+        let entry = state
+            .alias_directory
+            .get(&(alias_handle.clone(), namespace.clone()))
+            .cloned();
+        let Some(entry) = entry else {
+            // Silent drop — no log of the alias address.
+            return Ok(RelayPushAck { received: false });
+        };
+        let alias_id = entry.alias_id;
+        // 3. Append to the per-alias FIFO under a fresh seq.
+        let seq = {
+            let counter = state.inbox_seq_counters.entry(alias_id).or_insert(0);
+            *counter += 1;
+            *counter
+        };
+        let envelope = InboundEnvelope {
+            seq,
+            alias_id,
+            envelope: push.envelope,
+            server_received_at_ms: push.server_received_at_ms,
+        };
+        state
+            .inbound_queues
+            .entry(alias_id)
+            .or_insert_with(Vec::new)
+            .push(envelope);
+        Ok(RelayPushAck { received: true })
+    }
+
+    async fn fetch_alias_inbox(
+        &self,
+        session_token: &SessionToken,
+        alias_id: &RecordId,
+        since_seq: u64,
+    ) -> Result<Vec<InboundEnvelope>, CoreError> {
+        let state = self.state.lock().unwrap();
+        let _ = self.lookup_session(&state, session_token)?;
+        let queue = state.inbound_queues.get(alias_id);
+        Ok(queue
+            .map(|q| q.iter().filter(|e| e.seq > since_seq).cloned().collect())
+            .unwrap_or_default())
+    }
+
+    async fn ack_alias_inbox(
+        &self,
+        session_token: &SessionToken,
+        alias_id: &RecordId,
+        up_to_seq: u64,
+    ) -> Result<(), CoreError> {
+        let mut state = self.state.lock().unwrap();
+        let _ = self.lookup_session(&state, session_token)?;
+        state.inbox_acks.insert(*alias_id, up_to_seq);
+        // Best-effort GC: drop ack'd envelopes from the queue.
+        if let Some(q) = state.inbound_queues.get_mut(alias_id) {
+            q.retain(|e| e.seq > up_to_seq);
+        }
+        Ok(())
+    }
+
+    // ── Phase 7: relay identity registration ───────────────────
+
+    async fn register_relay_identity(
+        &self,
+        session_token: &SessionToken,
+        req: RegisterRelayRequest,
+    ) -> Result<RegisterRelayResponse, CoreError> {
+        let mut state = self.state.lock().unwrap();
+        let _ = self.lookup_session(&state, session_token)?;
+        // Production gates this on an admin role; in-memory
+        // backend is permissive (any session can register).
+        let mut relay_id_bytes = [0u8; 16];
+        let bytes =
+            random_bytes(16).map_err(|e| CoreError::Crypto(CryptoError::Random(e.to_string())))?;
+        relay_id_bytes.copy_from_slice(&bytes);
+        let relay_id = RelayId(relay_id_bytes);
+        state.relay_pubkeys.insert(
+            relay_id,
+            RelayRegistration {
+                pubkey: req.relay_pubkey,
+                allowed_namespaces: req.allowed_namespaces,
+            },
+        );
+        Ok(RegisterRelayResponse { relay_id })
+    }
+
+    async fn lookup_relay_pubkey(
+        &self,
+        relay_id: &RelayId,
+    ) -> Result<MlDsa65PublicKey, CoreError> {
+        let state = self.state.lock().unwrap();
+        state
+            .relay_pubkeys
+            .get(relay_id)
+            .map(|r| r.pubkey.clone())
+            .ok_or_else(|| {
+                CoreError::Validation(crate::errors::ValidationError::Other(
+                    "relay.not_found".into(),
+                ))
+            })
     }
 }
 

@@ -1,0 +1,71 @@
+[package]
+name = "vitonomi-mx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "vitonomi-mx — log-free, RAM-only SMTP relay. Encrypts inbound mail to the alias's published ML-KEM-768 pubkey and pushes ciphertext to the user's hub."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "vitonomi-mx"
+path = "src/main.rs"
+
+[lib]
+name = "vitonomi_mx"
+path = "src/lib.rs"
+
+[dependencies]
+vitonomi-core = { path = "../core" }
+
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util"] }
+
+# HTTP client (signed pushes + alias-directory lookups)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# TLS — wildcard cert generation (dev) + STARTTLS termination (prod)
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+
+# SMTP server framework. mailin-embedded wraps `mailin`'s state
+# machine over tokio-rustls; we own the Handler trait impl for
+# DATA-phase encryption + 250-OK RCPT semantics.
+mailin-embedded = "0.8"
+
+# Errors / serde / logging
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt"] }
+
+# Config
+figment = { version = "0.10", features = ["toml", "env"] }
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+toml = "0.8"
+
+async-trait = "0.1"
+
+# Poison-free Mutex for short cache critical sections (alias
+# directory lookup + per-base metrics counters). Avoids the
+# `unwrap_used` lint hit of `std::sync::Mutex::lock`.
+parking_lot = "0.12"
+
+# Secret hygiene
+zeroize = { version = "1.8", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+# Test-side SMTP client for the e2e tests in Slice 9.
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
+tokio = { version = "1", features = ["full", "test-util"] }

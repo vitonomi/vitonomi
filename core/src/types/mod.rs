@@ -12,7 +12,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::ValidationError;
 
+pub mod alias;
+pub mod alias_message;
 pub mod credential;
+pub mod domain;
+pub mod subdomain;
 
 /// Wire-format version. Carried in every top-level envelope so readers
 /// reject mismatched-version bytes with a typed error.

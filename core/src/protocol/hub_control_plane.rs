@@ -19,10 +19,20 @@ use crate::protocol::wire::accept::{
     AcceptRequest, AcceptResponse, CreateInviteRequest, CreateInviteResponse,
 };
 use crate::protocol::wire::admin_chain::ChainExport;
+use crate::protocol::wire::aliases::{AliasDirectoryEntry, InboundEnvelope};
 use crate::protocol::wire::bootstrap::{BootstrapRequest, BootstrapResponse};
+use crate::protocol::wire::domains::{
+    DomainChallenge, DomainRecord, DomainVerified,
+};
 use crate::protocol::wire::login::{
     LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse, UserLookupId,
 };
+use crate::protocol::wire::relay_push::{
+    RegisterRelayRequest, RegisterRelayResponse, RelayId, RelayPushAck, SignedRelayPush,
+};
+use crate::protocol::wire::subdomains::SubdomainDirectoryEntry;
+use crate::record::RecordId;
+use crate::types::subdomain::{Subdomain, SubdomainClaim};
 use crate::types::{ClusterId, SessionToken, VaultId};
 
 /// Cluster-register request — hub-blind. The hub stores users keyed
@@ -208,5 +218,138 @@ pub trait HubControlPlane: Send + Sync {
         &self,
         cluster_id: &ClusterId,
         user_id: &crate::types::UserId,
+    ) -> Result<crate::crypto::pq::MlDsa65PublicKey, CoreError>;
+
+    // ── Phase 7: subdomains (managed-base namespaces) ──────────
+
+    /// Claim a subdomain under a managed base domain. Server-
+    /// side admission gate enforces format / reserved-list /
+    /// taken / one-claim-per-cluster-per-base / signature.
+    /// **Does not** check `subdomain == username` — that
+    /// invariant lives client-side per the Phase 7 design
+    /// (see `docs/threat-model.md#relaxed_posture.client_side_username_check_only`).
+    async fn claim_subdomain(
+        &self,
+        session_token: &SessionToken,
+        claim: SubdomainClaim,
+    ) -> Result<(), CoreError>;
+
+    /// Release a previously-claimed subdomain. Tombstones the
+    /// (base, sub) pair so it can't be re-claimed by a
+    /// different user. Aliases under the namespace stop
+    /// resolving but the per-alias inbound queues remain so
+    /// the user can still drain pending mail.
+    async fn release_subdomain(
+        &self,
+        session_token: &SessionToken,
+        base_domain: &str,
+        subdomain: &Subdomain,
+    ) -> Result<(), CoreError>;
+
+    /// Public lookup. Anyone can resolve `(base, subdomain) →
+    /// user identity pubkey + alias-directory pointer`.
+    async fn lookup_subdomain(
+        &self,
+        base_domain: &str,
+        subdomain: &Subdomain,
+    ) -> Result<SubdomainDirectoryEntry, CoreError>;
+
+    /// Public list of base domains the hub allows subdomain
+    /// claims under (`["vito.gg"]` for hosted vitonomi).
+    async fn list_managed_base_domains(&self) -> Result<Vec<String>, CoreError>;
+
+    // ── Phase 7: custom domains (DNS-verify) ───────────────────
+
+    async fn add_custom_domain(
+        &self,
+        session_token: &SessionToken,
+        domain: &str,
+    ) -> Result<DomainChallenge, CoreError>;
+
+    async fn verify_custom_domain(
+        &self,
+        session_token: &SessionToken,
+        domain: &str,
+    ) -> Result<DomainVerified, CoreError>;
+
+    async fn list_custom_domains(
+        &self,
+        session_token: &SessionToken,
+    ) -> Result<Vec<DomainRecord>, CoreError>;
+
+    async fn remove_custom_domain(
+        &self,
+        session_token: &SessionToken,
+        domain: &str,
+    ) -> Result<(), CoreError>;
+
+    // ── Phase 7: alias directory (public read, signed write) ───
+
+    async fn publish_alias_pubkey(
+        &self,
+        session_token: &SessionToken,
+        entry: AliasDirectoryEntry,
+    ) -> Result<(), CoreError>;
+
+    async fn lookup_alias_pubkey(
+        &self,
+        alias_handle: &str,
+        namespace: &str,
+    ) -> Result<AliasDirectoryEntry, CoreError>;
+
+    async fn revoke_alias_pubkey(
+        &self,
+        session_token: &SessionToken,
+        alias_handle: &str,
+        namespace: &str,
+    ) -> Result<(), CoreError>;
+
+    // ── Phase 7: per-alias inbound queue (shape A) ─────────────
+
+    /// Push a relay-side encrypted envelope into the addressee's
+    /// per-alias FIFO. Hub verifies `sig_relay` against the
+    /// registered relay pubkey; on unknown alias returns a
+    /// silent-drop ack (`RelayPushAck { received: false }`)
+    /// without logging the address.
+    async fn relay_push_inbound(
+        &self,
+        push: SignedRelayPush,
+    ) -> Result<RelayPushAck, CoreError>;
+
+    /// Authenticated fetch of envelopes since `since_seq`
+    /// (exclusive). Empty result if no new mail.
+    async fn fetch_alias_inbox(
+        &self,
+        session_token: &SessionToken,
+        alias_id: &RecordId,
+        since_seq: u64,
+    ) -> Result<Vec<InboundEnvelope>, CoreError>;
+
+    /// Acknowledge envelopes up to and including `up_to_seq`.
+    /// Hub may garbage-collect ack'd envelopes on its own
+    /// schedule; the contract is "client has merged up to
+    /// here, you can drop them whenever".
+    async fn ack_alias_inbox(
+        &self,
+        session_token: &SessionToken,
+        alias_id: &RecordId,
+        up_to_seq: u64,
+    ) -> Result<(), CoreError>;
+
+    // ── Phase 7: relay identity registration ───────────────────
+
+    /// Operator-only. Registers a relay's ML-DSA-65 pubkey so
+    /// the hub will accept its [`relay_push_inbound`] calls.
+    /// Restricted to admin sessions in production; the
+    /// in-memory backend currently allows any session.
+    async fn register_relay_identity(
+        &self,
+        session_token: &SessionToken,
+        req: RegisterRelayRequest,
+    ) -> Result<RegisterRelayResponse, CoreError>;
+
+    async fn lookup_relay_pubkey(
+        &self,
+        relay_id: &RelayId,
     ) -> Result<crate::crypto::pq::MlDsa65PublicKey, CoreError>;
 }

@@ -74,6 +74,22 @@ pub enum ValidationError {
     InvalidUsername(String),
     #[error("invalid format version: {0}")]
     InvalidFormatVersion(u8),
+    /// A claimed subdomain didn't pass the format / length /
+    /// character-class rules. Carries a human-readable reason.
+    #[error("invalid subdomain: {0}")]
+    SubdomainInvalid(String),
+    /// A claimed subdomain is on the security-critical reserved
+    /// list (e.g. `www`, `mail`, `mx`, `smtp`, `app`, …).
+    #[error("subdomain `{0}` is reserved")]
+    SubdomainReserved(String),
+    /// **Privacy invariant** violation: the user attempted to
+    /// claim a subdomain whose normalised string equals their
+    /// own `username`. Phase 7 enforces this client-side only —
+    /// the hub does not re-check (preserves zero-knowledge-of-
+    /// username). See `docs/threat-model.md#relaxed_posture.
+    /// client_side_username_check_only`.
+    #[error("subdomain.equals_username: claimed subdomain must not equal the user's username")]
+    SubdomainEqualsUsername,
     #[error("invalid: {0}")]
     Other(String),
 }
