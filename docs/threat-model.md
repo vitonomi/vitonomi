@@ -1,7 +1,7 @@
 ---
-formatVersion: 1
-status: stub
-last-reviewed: 2026-05-01
+formatVersion: 2
+status: partial
+last-reviewed: 2026-05-15
 ---
 
 # vitonomi threat model
@@ -215,6 +215,104 @@ band offline chain copies*. Mitigations are normative:
   high-entropy string; verification re-checks DNS at submission;
   re-verification on `verifiedAt` expiry can be required for
   high-value domains.
+
+## Phase 7: alias platform threat model
+
+### SMTP-RCPT enumeration
+
+- **Capability.** External attacker probes the relay with
+  `RCPT TO:<guess@<base>>` for many guesses.
+- **Defence.** Relay returns `250 OK` for every RCPT
+  regardless of alias existence. Alias-existence is checked at
+  `data_end`; on miss the message is silent-dropped (counter
+  incremented; no log line carries the address). Verified by
+  `mx::tests::smtp_rcpt_returns_250_for_invalid_address`.
+
+### DNS scraping for tenant enumeration
+
+- **Capability.** Attacker queries `*.<base_domain>` against
+  the configured DNS zone trying to enumerate active
+  subdomains and thereby tenants.
+- **Defence.** vitonomi recommends operators provision a
+  wildcard A/MX record at `*.<base_domain>` (no per-subdomain
+  records on the public zone). The `dns_enumeration_assertion`
+  integration test seeds 1000 fake usernames into a mock zone
+  and asserts zero responses leak any of them.
+
+### Certificate Transparency tenant leak
+
+- **Capability.** Attacker scrapes CT logs for certs issued
+  under `<base_domain>` to enumerate tenants from
+  per-subdomain SANs.
+- **Defence.** Relay binds **a single wildcard cert per base**
+  (`*.<base_domain>`). Per-subdomain certs are forbidden —
+  enforced by the
+  `mx::tls::tests::dev_cert_san_does_not_contain_per_subdomain_entry`
+  CI gate. Production deployments use ACME DNS-01 wildcard
+  issuance.
+
+### Relay metric scraping
+
+- **Capability.** Attacker scrapes a hosted relay's metrics
+  endpoint to enumerate the per-alias acceptance pattern.
+- **Defence.** The relay's metric counters key on the
+  configured base domain only — never on `(alias, base)`. A
+  per-alias metric key would leak the tenant list. Verified by
+  `mx::operability::metrics::tests::metrics_snapshot_keys_are_only_base_domains`.
+
+### Relay log scraping
+
+- **Capability.** Attacker with disk access to the relay host
+  reads logs to recover sender / recipient / subject lines.
+- **Defence.** Library code uses `tracing::info!` only with
+  redacted-by-design fields; a tracing layer drops or redacts
+  any event whose target matches `mailin*` AND fields contain
+  `from|to|rcpt|sender|recipient|subject|body|message|address|envelope`.
+  Verified by `mx::operability::tracing_redact::tests`.
+
+### Hub-side alias enumeration
+
+- **Capability.** A malicious hub operator (or someone with
+  read access to hub state) tries to enumerate users from the
+  alias directory.
+- **Defence.** The directory key is `(alias_handle, namespace)`,
+  not `(alias_handle, username)`. The user's `username` never
+  appears as a directory component. The hub stores no
+  username → directory-pointer mapping; the alias_directory
+  pointer is simply the public `<sub>.<base>` string the
+  user already published.
+
+### Relaxed posture: client-side `subdomain != username` check
+
+- **Capability.** A patched / malicious vitonomi client could
+  submit a `SubdomainClaim` whose subdomain equals the user's
+  username. The hub does not re-check this invariant.
+- **Why we accept this.** The hub-blindness invariant forbids
+  the hub from holding the user's plaintext username (or its
+  hash). Re-checking server-side would force the hub to learn
+  the username, breaking
+  `architecture.md#hub-blindness-trust-topology`.
+- **Worst case.** A user who patches their own client ends up
+  with their own username as a public subdomain — i.e., the
+  user explicitly chose to expose themselves. Honest clients
+  cannot bypass: the client-side gate
+  (`Subdomain::parse_against_username`) refuses with
+  `subdomain.equals_username` BEFORE any HTTP call. The
+  integration test
+  `subdomain_claim_e2e::subdomain_claim_rejects_username_collision_with_zero_http_traffic`
+  asserts zero network traffic on collision.
+- **Tagged invariant slug.**
+  `relaxed_posture.client_side_username_check_only`.
+
+### Activity-timing leak
+
+- **Capability.** A passive observer correlates relay → hub
+  egress packet sizes and timing to infer per-base-domain
+  message volume.
+- **Defence (current).** None — documented as a known
+  limitation. We do not claim traffic-analysis resistance.
+- **Mitigation roadmap.** Batched-push timing + cover traffic
+  is a v1.1 follow-up.
 
 ## Out-of-scope attacks
 

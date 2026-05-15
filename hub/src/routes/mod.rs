@@ -5,6 +5,7 @@ pub mod auth;
 pub mod clusters;
 pub mod errors;
 pub mod keyblob;
+pub mod phase7;
 pub mod status;
 pub mod users;
 pub mod vaults;

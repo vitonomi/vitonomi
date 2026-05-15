@@ -1,7 +1,7 @@
 ---
-formatVersion: 0
-status: stub
-last-reviewed: 2026-05-01
+formatVersion: 1
+status: partial
+last-reviewed: 2026-05-15
 ---
 
 # Record-type schemas
@@ -50,12 +50,51 @@ test rejects any future field whose name matches `password |
 totp | secret | notes | private_key | passwd | pass`. Anything
 secret belongs on `CredentialBody`.
 
+### `Alias` (Phase 7, shipped)
+
+| Face     | Rust type                                          | Contains                                                                                              |
+| -------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Metadata | `vitonomi_core::types::alias::AliasMetadata`        | alias_handle, namespace, label, alias_kem_pubkey, sig_user, expiry, active, spam_policy, tags, created |
+| Body     | `vitonomi_core::types::alias::AliasBody`            | alias_kem_secret_key (ML-KEM-768 seed, ZeroizeOnDrop)                                                 |
+
+Byte layout in
+[`data-format.md`](data-format.md#aliasmetadata). The
+`sig_user_over_pubkey` binds the KEM pubkey to
+`(alias_handle, namespace)` so a fetcher can detect hub-side
+substitution.
+
+### `AliasMessage` (Phase 7, shipped)
+
+| Face     | Rust type                                                  | Contains                                                              |
+| -------- | ---------------------------------------------------------- | --------------------------------------------------------------------- |
+| Metadata | `vitonomi_core::types::alias_message::AliasMessageMetadata` | alias_id, sender, subject, snippet (≤140), spf/dkim/dmarc, attachments |
+| Body     | (raw bytes, no Rust struct)                                 | encrypted MIME bytes — the message itself                             |
+
+The body face IS the message content; there is no separate
+`*Body` Rust struct. The RecordFrame's `body_data_map` points
+at the chunks.
+
+### `Domain` (Phase 7, shipped)
+
+Unified record for both subdomain claims under hub-managed
+bases AND user-owned BYO domains verified via DNS challenge.
+
+| Face     | Rust type                                  | Contains                                                                                                |
+| -------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Metadata | `vitonomi_core::types::domain::DomainMetadata` | domain (full), is_custom, status, verified_at, optional challenge (custom only), optional base_domain (subdomain only), created |
+
+No body face — the record fits entirely in metadata.
+Discrimination at the field level via `is_custom`:
+
+- `is_custom = false`, `base_domain = Some(<base>)`, `status =
+  Active` immediately on claim — these are subdomain claims
+  under hub-managed bases (e.g. `inbox-demo.vito.gg`).
+- `is_custom = true`, `challenge = Some(<32B>)`, `status =
+  Pending` until DNS verification flips it to `Verified` then
+  `Active` — these are BYO custom domains.
+
 ### Future record types
 
-Filled in by the delivering phase:
-
-- `Alias`, `AliasMessage`, `CustomDomain` (Phase 7) — see
-  PROJECT.md Phase 7.
 - `Photo`, `Note`, `File` (v1.1+).
 
 Until each section lands here, the source-of-truth Rust types live

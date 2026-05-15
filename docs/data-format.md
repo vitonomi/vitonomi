@@ -1,7 +1,7 @@
 ---
-formatVersion: 2
+formatVersion: 4
 status: partial
-last-reviewed: 2026-05-12
+last-reviewed: 2026-05-15
 ---
 
 # vitonomi data format
@@ -312,10 +312,18 @@ wire (inside snapshot envelopes and in AEAD AAD bindings):
 | Credential    | `0x01`  | MVP      |
 | Alias         | `0x02`  | MVP      |
 | AliasMessage  | `0x03`  | MVP      |
+| Domain        | `0x04`  | MVP      |
 | Photo         | `0x10`  | reserved |
 | Note          | `0x20`  | reserved |
 | File          | `0x30`  | reserved |
 | Other values  |         | reserved — parse-error on read in V1 |
+
+`Domain` carries both the user's claimed subdomains under
+hub-managed bases (`is_custom = false`, `base_domain = Some(_)`)
+and user-owned BYO domains verified via DNS challenge
+(`is_custom = true`, `challenge = Some(_)` until verification).
+The unification keeps a single record-type discriminator while
+preserving the lifecycle distinction at the metadata level.
 
 Adding a new MVP-tier record type does not require a `formatVersion`
 bump (readers in V1 already reject reserved bytes). Promoting a
@@ -815,7 +823,212 @@ re-invited.
 pending row leaks no metadata to the hub beyond the irreducible
 plaintext fields (`vault_pubkey`, `invite_nonce`, timestamps).
 
-## Alias-pubkey directory entry — TBD (Phase 8)
+## Phase 7: aliases + subdomains + domains
+
+### `SubdomainClaim`
+
+The byte layout the user signs when claiming a subdomain on a
+hub-managed base. **Privacy invariant**: the subdomain MUST NOT
+equal the user's `username`. This check is enforced
+**client-side only** by `Subdomain::parse_against_username` —
+the hub does not re-check (see
+`threat-model.md#relaxed_posture.client_side_username_check_only`).
+
+```text
+SubdomainClaim signed-bytes layout:
+  magic:                  b"vitonomi/subdomain_claim/v1"  // 27 bytes
+  format_version:         uint8                            // 0x01
+  subdomain_len:          varint
+  subdomain:              utf8(subdomain)                  // ASCII [a-z0-9_-]{3..32}
+  base_domain_len:        varint
+  base_domain:            utf8(base_domain)
+  identity_pubkey_len:    varint
+  identity_pubkey:        bytes                            // ML-DSA-65 pubkey
+  claimed_at_ms:          uint64 LE
+```
+
+Reserved subdomains (case-insensitive, hard-rejected at parse
+time): `www`, `mail`, `smtp`, `app`, `api`, `hub`, `admin`,
+`support`, `help`, `info`, `abuse`, `postmaster`, `noreply`.
+`mx` is implicitly unclaimable via the 3-character minimum.
+
+### `AliasMetadata`
+
+Searchable face of an alias record. CBOR-encoded; ≤ 512 bytes
+in the typical case so it rides inline in the snapshot frame's
+`MetadataField::Inline { bytes }` variant.
+
+```text
+AliasMetadata {
+  format_version:         uint8 (1)
+  alias_id_hint:          bytes(16)        // matches the RecordFrame's record_id
+  alias_handle:           utf8 (local part)
+  namespace:              utf8             // full domain (e.g. "inbox-demo.vito.gg")
+  label:                  optional utf8
+  alias_kem_pubkey:       bytes(~1184)     // ML-KEM-768 pubkey
+  sig_user_over_pubkey:   bytes(var)       // ML-DSA-65 signature binding pubkey to (handle, namespace)
+  expiry_ms:              optional uint64
+  active:                 bool
+  spam_policy:            string-enum {open-inbox, require-sender-allow-list, require-spf-dmarc-pass}
+  tags:                   array<utf8>
+  last_used_at_ms:        optional uint64
+  created_at_ms:          uint64
+}
+```
+
+The `sig_user_over_pubkey` covers the deterministic byte
+representation `b"vitonomi/alias_pubkey/v1" || alias_handle ||
+"@" || namespace || alias_kem_pubkey` — lets a fetcher detect
+hub-side substitution attacks.
+
+### `AliasBody`
+
+Secret face — the ML-KEM-768 decapsulation key. Sealed as a
+separate body blob; `ZeroizeOnDrop`.
+
+```text
+AliasBody {
+  format_version:         uint8 (1)
+  alias_kem_secret_key:   bytes(64)        // FIPS 203 seed
+}
+```
+
+### `AliasMessageMetadata`
+
+One inbound message snapshot, as written by `alias inbox` after
+AEAD-opening + RFC-5322 header parsing. Snippet is capped at 140
+characters; pathological-size variants (320-char sender + 256-char
+subject + 140-char snippet) fall back to a sealed-blob metadata
+face.
+
+```text
+AliasMessageMetadata {
+  format_version:         uint8 (1)
+  alias_id:               bytes(16)
+  sender:                 utf8
+  subject:                utf8
+  received_at_ms:         uint64
+  size_bytes:             uint64
+  snippet:                utf8 (≤ 140 chars)
+  has_attachments:        bool
+  attachment_count:       uint16
+  spf:                    enum {pass, fail, none}
+  dkim:                   enum {pass, fail, none}
+  dmarc:                  enum {pass, fail, none}
+}
+```
+
+Body face IS the message content (encrypted MIME bytes); the
+RecordFrame's `body_data_map` points at the chunks.
+
+### `DomainMetadata`
+
+Unified record for both subdomain claims and custom-domain
+DNS-verify entries. Discriminated by `is_custom`.
+
+```text
+DomainMetadata {
+  format_version:         uint8 (1)
+  domain:                 utf8                // full domain
+  is_custom:              bool                // false=subdomain claim, true=BYO
+  status:                 enum {pending, verified, active, disabled}
+  verified_at_ms:         optional uint64
+  challenge:              optional bytes(32)  // Some only when is_custom=true && status=Pending
+  base_domain:            optional utf8       // Some(base) for is_custom=false
+  created_at_ms:          uint64
+}
+```
+
+### `AliasInboundCiphertext`
+
+What the relay AEAD-seals to the alias's KEM pubkey before
+pushing to the hub. KEM-then-AEAD; the AAD binds `alias_id` and
+`server_received_at_ms` to prevent cross-alias substitution and
+relay-side timestamp replay.
+
+```text
+AliasInboundCiphertext {
+  format_version:         uint8 (1)
+  kem_ciphertext:         bytes(1088)      // ML-KEM-768, fixed-size
+  aead_nonce:             bytes(24)
+  aead_payload:           bytes(var)       // plaintext + 16-B Poly1305 tag
+}
+
+AAD recipe:
+  b"vitonomi/alias_inbound/v1" || alias_id(16) || received_at_ms(8 LE)
+
+AEAD key derivation:
+  shared_secret = ML-KEM-768.Decaps(kem_ciphertext, sk)
+  aead_key      = HKDF-SHA-256(salt=none, ikm=shared_secret,
+                               info=b"vitonomi/alias_inbound/aead/v1") → 32 bytes
+```
+
+### Alias directory entry (`AliasDirectoryEntry`)
+
+Hub-stored, public-readable index keyed by `(alias_handle,
+namespace)`. **Privacy call-out**: the user's `username` never
+appears as either component (the `namespace` component is the
+full domain, not the username).
+
+```text
+AliasDirectoryEntry {
+  alias_handle:           utf8
+  namespace:              utf8
+  alias_id:               bytes(16)
+  alias_kem_pubkey:       bytes(~1184)
+  user_identity_pubkey:   bytes
+  sig_user:               bytes(var)       // ML-DSA-65 over the preceding fields
+}
+```
+
+### Custom-domain DNS challenge
+
+A hub-issued domain claim emits a `DomainChallenge` the user
+publishes at their DNS provider:
+
+```
+_vitonomi.<domain>.   TXT   "<base64url(32 random bytes)>"
+<domain>.             MX 10 <hub-configured-relay-target>.
+```
+
+`POST /v1/domains/{domain}/verify` re-resolves both records via
+`hickory-resolver` and flips status from `Pending` → `Verified`
+on a match.
+
+## Privacy invariants
+
+vitonomi enforces several Phase 7 privacy invariants on the
+alias surface:
+
+- **`subdomain != username`** — refused at parse time by
+  `Subdomain::parse_against_username`. Client-side only;
+  see `threat-model.md`.
+- **Wildcard TLS at the relay** — the SMTP relay binds a single
+  `*.<base_domain>` certificate, not per-subdomain certs (which
+  would leak the tenant list via Certificate Transparency
+  logs). A CI gate
+  (`mx::tls::tests::dev_cert_san_does_not_contain_per_subdomain_entry`)
+  fails any cert SAN that looks per-subdomain.
+- **250-OK on every RCPT** — the relay returns `250 OK` for every
+  RCPT command regardless of alias existence; alias-existence
+  decisions move to `data_end` (silent-drop on miss). Plugs
+  the SMTP-RCPT enumeration channel.
+- **Per-base-domain metrics only** — relay counters key on the
+  configured base (e.g. `vito.gg`), never on `(alias, base)` —
+  per-alias keys would leak the relay's tenant list to anyone
+  scraping the metrics endpoint.
+- **No plaintext on disk, no plaintext in logs** — the SMTP
+  relay's encryptor is a `Vec<u8>` allocated, used, and
+  zeroized inside one async function whose stack frame drops
+  before return. A tracing redaction layer drops sender /
+  recipient / subject fields from `mailin*` events.
+- **Hub-blind by construction** — the hub stores
+  `(alias_handle, namespace) → kem_pubkey` for the directory
+  and `(alias_id, opaque_ciphertext, server_ts)` for the inbound
+  queue. It never sees the message body, the sender, the
+  recipient address resolution, or the user's username.
+
+## Alias-pubkey directory entry — historical placeholder (Phase 8)
 
 Public-readable entry binding `<handle>@<domain>` to an
 ML-KEM-768 pubkey, signed by the alias owner's ML-DSA-65 key.
