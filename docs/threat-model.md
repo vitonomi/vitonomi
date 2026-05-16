@@ -216,7 +216,7 @@ band offline chain copies*. Mitigations are normative:
   re-verification on `verifiedAt` expiry can be required for
   high-value domains.
 
-## Phase 7: alias platform threat model
+## Alias-platform threat model
 
 ### SMTP-RCPT enumeration
 

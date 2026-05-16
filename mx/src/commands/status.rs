@@ -12,8 +12,8 @@ use crate::config::MxConfig;
 /// # Errors
 ///
 /// Currently infallible; signature returns `anyhow::Result` for
-/// future-proofing (e.g. when the relay-identity inspection
-/// landing in Slice 7 wants to print fingerprint).
+/// future-proofing (e.g. for future mx-identity inspection that
+/// wants to print the fingerprint).
 #[allow(clippy::print_stdout)]
 pub fn run(cfg: &MxConfig) -> anyhow::Result<()> {
     println!("server.bind_addr   = {}", cfg.server.bind_addr);

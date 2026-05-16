@@ -21,6 +21,7 @@ use anyhow::{anyhow, Context as _};
 use libp2p::Multiaddr;
 
 use vitonomi_core::crypto::keyblob::decrypt_with_password;
+use vitonomi_core::crypto::keys::MasterSecretKeys;
 use vitonomi_core::crypto::pq::MlDsa65SecretKey;
 use vitonomi_core::record::record_store::{RecordStore, UserKeys};
 use vitonomi_core::record::user_keys::UserAeadMaster;
@@ -51,7 +52,9 @@ impl RecordSession {
 }
 
 /// Build a `RecordSession`. Prompts for password, dials the vault,
-/// returns the wired store.
+/// returns the wired store. Use [`open_with_secrets`] if the caller
+/// already has unsealed `MasterSecretKeys` and wants to avoid a
+/// second password prompt within one CLI invocation.
 ///
 /// # Errors
 ///
@@ -62,15 +65,37 @@ pub async fn open<P: Prompts + ?Sized>(
     prompts: &mut P,
 ) -> anyhow::Result<RecordSession> {
     let st = state::load(state_path)?;
+    let _ = st
+        .session_token
+        .as_ref()
+        .ok_or_else(|| anyhow!("no active session — run `login` first"))?;
+    let password = prompts.password("Password", false)?;
+    let secrets = decrypt_with_password(password.as_bytes(), &st.encrypted_key_blob)
+        .map_err(|e| anyhow!("decrypt key blob (wrong password?): {e}"))?;
+    open_with_secrets(cfg, state_path, &secrets).await
+}
+
+/// Build a `RecordSession` from already-unsealed master secrets.
+///
+/// Use this when one CLI command needs `identity_sk` (or other
+/// `MasterSecretKeys` fields) for client-side signing AND also needs
+/// a `RecordSession` to read/write the snapshot chain. Calling
+/// [`open`] in that case would prompt for the password twice;
+/// `open_with_secrets` reuses the already-unsealed material.
+///
+/// # Errors
+///
+/// Crypto / network / state failures.
+pub async fn open_with_secrets(
+    cfg: &CliConfig,
+    state_path: &Path,
+    secrets: &MasterSecretKeys,
+) -> anyhow::Result<RecordSession> {
+    let st = state::load(state_path)?;
     let session_token = st
         .session_token
         .as_ref()
         .ok_or_else(|| anyhow!("no active session — run `login` first"))?;
-
-    // Re-unseal the master secrets from the cached key blob.
-    let password = prompts.password("Password", false)?;
-    let secrets = decrypt_with_password(password.as_bytes(), &st.encrypted_key_blob)
-        .map_err(|e| anyhow!("decrypt key blob (wrong password?): {e}"))?;
     let identity_sk = MlDsa65SecretKey(secrets.identity.0.clone());
     let identity_pk = vitonomi_core::crypto::pq::ml_dsa_65_signing_pubkey_from_seed(&identity_sk)
         .map_err(|e| anyhow!("derive identity pubkey from sk: {e}"))?;
@@ -78,8 +103,7 @@ pub async fn open<P: Prompts + ?Sized>(
         .map_err(|e| anyhow!("user_aead_master: {e}"))?;
 
     // Build a hub HTTP client and look up the vault directory. We
-    // pick the first vault whose `multiaddrs` is non-empty — slice 5
-    // will replace this with admin-chain SetMainVault routing.
+    // pick the first vault whose `multiaddrs` is non-empty.
     // TODO: swap to SPKI-pinned client once the CLI grows a
     // `pinned_client(fingerprint)` helper alongside `default_client`.
     let client = hub_client::default_client()?;
@@ -101,7 +125,6 @@ pub async fn open<P: Prompts + ?Sized>(
         .parse()
         .with_context(|| format!("parse vault multiaddr `{vault_addr}`"))?;
 
-    // CLI libp2p ed25519 key persists under `<state_dir>/`.
     let state_dir = state_dir_of(state_path);
     let cli_kp = load_or_generate_libp2p_key(&state_dir)?;
     let client_handle = Arc::new(dial_vault(cli_kp, multiaddr).await?);

@@ -10,7 +10,7 @@ use vitonomi_cli::commands::vault_invite::{run as cli_vault_invite, VaultInviteA
 use vitonomi_cli::config::CliConfig;
 use vitonomi_cli::prompts::ScriptedPrompts;
 
-use super::params::{dummy_fingerprint, fast_keyblob_params, fast_lookup_params};
+use super::params::{fast_keyblob_params, fast_lookup_params, placeholder_hub_fingerprint};
 
 /// Bundle of admin-side paths the harness produces.
 pub struct AdminContext {
@@ -79,7 +79,7 @@ pub async fn run_vault_invite(admin: &AdminContext, password: &str, vault_name: 
         VaultInviteArgs {
             state_path: &admin.cli_state_path,
             vault_name: vault_name.into(),
-            hub_cert_fingerprint: dummy_fingerprint(),
+            hub_cert_fingerprint: placeholder_hub_fingerprint(),
             ttl_secs: 900,
         },
         &mut prompts,

@@ -1,12 +1,19 @@
-//! `vitonomi-cli domain list` — list the user's custom domains.
+//! `vitonomi-cli domain list` — print every custom domain the
+//! cluster has registered by walking local `Domain` records on the
+//! snapshot chain (filtering for `is_custom == true`). Mirrors the
+//! `subdomain list` pattern — hub-blindness friendly, no extra
+//! hub round-trip.
 
 use std::path::Path;
 
 use anyhow::anyhow;
 
+use vitonomi_core::record::RecordType;
+use vitonomi_core::types::domain::DomainMetadata;
+
+use crate::commands::library_session;
 use crate::config::CliConfig;
-use crate::hub_client;
-use crate::state;
+use crate::prompts::Prompts;
 
 pub struct DomainListArgs<'a> {
     pub state_path: &'a Path,
@@ -16,28 +23,46 @@ pub struct DomainListArgs<'a> {
 ///
 /// # Errors
 ///
-/// Network / state failures.
+/// Network / state / decode failures.
 #[allow(clippy::print_stdout)]
-pub async fn run(cfg: &CliConfig, args: DomainListArgs<'_>) -> anyhow::Result<()> {
-    let st = state::load(args.state_path)?;
-    let token = st
-        .session_token
-        .as_ref()
-        .ok_or_else(|| anyhow!("no active session — run `login` first"))?;
-    let client = hub_client::default_client()?;
-    let resp = hub_client::list_custom_domains(&client, &cfg.hub.url, &token.0).await?;
-    if resp.domains.is_empty() {
-        eprintln!("(no custom domains)");
-        return Ok(());
-    }
-    for d in &resp.domains {
+pub async fn run<P: Prompts + ?Sized>(
+    cfg: &CliConfig,
+    args: DomainListArgs<'_>,
+    prompts: &mut P,
+) -> anyhow::Result<()> {
+    let session = library_session::open(cfg, args.state_path, prompts).await?;
+    let listed = session
+        .session
+        .record_store
+        .list_metadata(RecordType::Domain)
+        .await
+        .map_err(|e| anyhow!("list_metadata: {e}"))?;
+
+    let mut shown = 0usize;
+    for (id, bytes) in &listed {
+        let m = match DomainMetadata::from_metadata_bytes(bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("(skipping {} — metadata decode: {e})", id.to_hex());
+                continue;
+            }
+        };
+        if !m.is_custom {
+            continue;
+        }
         println!(
-            "{}\t{:?}\tverified_at_ms={}",
-            d.domain,
-            d.status,
-            d.verified_at_ms
+            "{}  {}  status={:?}  verified_at_ms={}",
+            id.to_hex(),
+            m.domain,
+            m.status,
+            m.verified_at_ms
                 .map_or_else(|| "-".to_string(), |t| t.to_string())
         );
+        shown += 1;
     }
+    if shown == 0 {
+        eprintln!("(no custom domains)");
+    }
+    session.shutdown().await;
     Ok(())
 }

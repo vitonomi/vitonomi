@@ -141,11 +141,10 @@ pub enum RecordType {
     Credential,
     Alias,
     AliasMessage,
-    /// Phase 7 Slice 6: namespace ownership records. Both
-    /// `subdomain claim` (under a managed base) and `domain
-    /// add` (custom DNS-verified) write the same `Domain`
-    /// record discriminated by an `is_custom` flag on the
-    /// metadata. See `core::types::domain::DomainMetadata`.
+    /// Namespace-ownership records. Both `subdomain claim` (under
+    /// a managed base) and `domain add` (DNS-verified) write the
+    /// same `Domain` record discriminated by an `is_custom` flag
+    /// on the metadata. See `core::types::domain::DomainMetadata`.
     Domain,
 }
 
@@ -259,8 +258,7 @@ mod tests {
 
     #[test]
     fn record_type_rejects_reserved_bytes() {
-        // Phase 7 promotes 0x04 to `Domain`. New reserved set:
-        // 0x00, 0x05..=0x0f, 0x10, 0x20, 0x30, 0xff.
+        // Reserved bytes: 0x00, 0x05..=0x0f, 0x10, 0x20, 0x30, 0xff.
         for byte in [0x00u8, 0x05, 0x0f, 0x10, 0x20, 0x30, 0xff] {
             assert!(RecordType::from_u8(byte).is_err(), "byte {byte:#x}");
         }

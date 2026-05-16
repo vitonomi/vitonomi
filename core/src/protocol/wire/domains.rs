@@ -1,4 +1,4 @@
-//! Wire types for the Phase 7 custom-domain DNS-verify surface.
+//! Wire types for the user-owned domain DNS-verify surface.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ pub enum DomainStatus {
     Pending,
     /// DNS records resolved correctly; ready to be activated.
     Verified,
-    /// Active — the relay accepts mail for this domain.
+    /// Active — the mx relay accepts mail for this domain.
     Active,
     /// Operator / user disabled. Aliases remain but reject mail.
     Disabled,

@@ -1,7 +1,7 @@
 //! `vitonomi-cli alias mark-read <alias-id> <message-id>` —
-//! placeholder: per-message "read" state lives on a future client-
-//! local index (Phase 11+). For now this prints the IDs so scripts
-//! can chain it as a no-op marker.
+//! placeholder: per-message "read" state will live on a future
+//! client-local index. For now this prints the IDs so scripts can
+//! chain it as a no-op marker.
 
 use std::path::Path;
 

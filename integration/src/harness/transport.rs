@@ -1,6 +1,6 @@
-//! Instrumented decorators around `ChunkTransport` used by Phase 6
-//! tests to assert browse / search / metadata-only edits never
-//! fetch (or upload) body chunks.
+//! Instrumented decorators around `ChunkTransport` used by tests
+//! to assert browse / search / metadata-only edits never fetch
+//! (or upload) body chunks.
 
 use std::sync::{Arc, Mutex};
 

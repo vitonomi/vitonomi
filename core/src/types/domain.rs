@@ -38,7 +38,7 @@ pub struct DomainMetadata {
     /// pending custom domains and immediately `Some(now)` for
     /// fresh subdomain claims.
     pub verified_at_ms: Option<u64>,
-    /// 32-byte challenge bytes from the hub's `add_custom_domain`
+    /// 32-byte challenge bytes from the hub's `add_domain`
     /// flow. `Some` only while `is_custom = true && status =
     /// Pending`. `None` for subdomain claims (no DNS challenge
     /// needed).
@@ -51,6 +51,23 @@ pub struct DomainMetadata {
 }
 
 impl DomainMetadata {
+    /// Deterministic `RecordId` for a domain string. Used so the
+    /// `subdomain claim` / `domain add` / `domain verify` /
+    /// `domain remove` flows all reference the same record across
+    /// the snapshot chain (no need to remember an extra id).
+    ///
+    /// The canonical form is the lowercase ASCII representation;
+    /// the hub-side and client-side parsers already enforce the
+    /// DNS-safe charset, so a simple `to_ascii_lowercase` is enough.
+    #[must_use]
+    pub fn record_id_for(domain: &str) -> RecordId {
+        let canonical = domain.to_ascii_lowercase();
+        let hash = blake3::hash(canonical.as_bytes());
+        let mut out = [0u8; 16];
+        out.copy_from_slice(&hash.as_bytes()[..16]);
+        RecordId(out)
+    }
+
     /// Encode to deterministic CBOR for storage in a
     /// `MetadataField::Inline`.
     ///
@@ -242,6 +259,19 @@ mod tests {
             .collect();
         assert!(keys2.contains(&("kind".into(), "custom".into())));
         assert!(keys2.contains(&("status".into(), "pending".into())));
+    }
+
+    #[test]
+    fn record_id_for_is_deterministic_and_case_insensitive() {
+        let a = DomainMetadata::record_id_for("inbox-demo.vito.gg");
+        let b = DomainMetadata::record_id_for("INBOX-DEMO.VITO.GG");
+        let c = DomainMetadata::record_id_for("inbox-demo.vito.gg");
+        assert_eq!(a, b, "case must not change the id");
+        assert_eq!(a, c, "same input must produce same id");
+        // Different domain → different id (collision is theoretically
+        // possible but astronomically unlikely for a 128-bit prefix).
+        let d = DomainMetadata::record_id_for("other.vito.gg");
+        assert_ne!(a, d);
     }
 
     #[test]

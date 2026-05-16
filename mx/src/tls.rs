@@ -7,9 +7,9 @@
 //! **Privacy invariant**: the cert MUST be a wildcard with a
 //! single SAN entry — issuing per-subdomain certs would post
 //! every claimed handle to public Certificate Transparency
-//! logs, defeating the no-username-in-DNS guarantee. Slice 9's
-//! `tls_wildcard_cert_no_per_subdomain_san` test gates this in
-//! CI.
+//! logs, defeating the no-username-in-DNS guarantee. The CI gate
+//! `tls::tests::dev_cert_san_does_not_contain_per_subdomain_entry`
+//! enforces this.
 
 use std::path::Path;
 

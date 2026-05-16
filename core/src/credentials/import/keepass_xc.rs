@@ -11,7 +11,7 @@
 //! `.kdbx` binary files are NOT supported — users must export to
 //! CSV first. (Adding the binary KDBX reader would mean
 //! implementing the Argon2-based KDF + a separate audit surface;
-//! deferred per the user decision in the Phase 6 plan.)
+//! deferred deliberately.)
 
 use std::io::Read;
 

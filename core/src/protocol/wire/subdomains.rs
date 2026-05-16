@@ -1,4 +1,4 @@
-//! Wire types for the Phase 7 subdomain-claim surface.
+//! Wire types for the subdomain-claim surface.
 //!
 //! The hub stores `(base_domain, subdomain) → user record`. The
 //! claim itself ([`crate::types::subdomain::SubdomainClaim`]) is
@@ -11,7 +11,7 @@ use crate::crypto::pq::MlDsa65PublicKey;
 use crate::types::subdomain::Subdomain;
 
 /// Public lookup result for `GET /v1/subdomains/{base}/{sub}`.
-/// Returned to anyone (no auth) so a relay or client can resolve
+/// Returned to anyone (no auth) so an mx relay or client can resolve
 /// "who owns this namespace?" without holding a session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubdomainDirectoryEntry {

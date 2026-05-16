@@ -4,7 +4,7 @@
 //! `sealed_cluster_key` (K2 delivery; see
 //! `vitonomi_core::crypto::invite_kek`). Loaded by every command
 //! that needs to seal/unseal cluster-scoped material — admin-chain
-//! inner payloads, vault names, and (Phase 1+) records.
+//! inner payloads, vault names, and records.
 //!
 //! Stored as raw 32 bytes at `<data_dir>/cluster_shared_key.bin`,
 //! mode 0600. Refuses to read with any other perms.

@@ -4,8 +4,8 @@
 //! Transport-agnostic: `RecordStore` is parameterised over a
 //! [`ChunkTransport`] and a [`HeadPointerTransport`]. Tests wire it
 //! to in-memory implementations of both; production wires it to a
-//! libp2p chunk transport (clients/cli) and a hub HTTP head-pointer
-//! transport (Slice 4 follow-up).
+//! libp2p chunk transport (clients/cli) and (planned) a hub HTTP
+//! head-pointer transport.
 //!
 //! Each record has two faces — see [`crate::record`] module docs for
 //! the model. The public API surfaces this:
@@ -64,8 +64,7 @@ pub trait ChunkTransport: Send + Sync {
 }
 
 /// Head-pointer storage as seen by the client. Tests use an in-memory
-/// map; the CLI uses a local file; Slice 4 will swap in the hub HTTP
-/// transport.
+/// map; the CLI uses a local file; a hub HTTP transport is planned.
 #[async_trait]
 pub trait HeadPointerTransport: Send + Sync {
     async fn get(&self, record_type: RecordType) -> Result<Option<StoredHeadPointer>, CoreError>;

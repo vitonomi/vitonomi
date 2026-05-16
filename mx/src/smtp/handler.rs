@@ -22,12 +22,12 @@ use std::sync::Arc;
 use mailin_embedded::response::{INTERNAL_ERROR, OK};
 use mailin_embedded::{Handler, Response};
 
-use vitonomi_core::protocol::wire::relay_push::RelayId;
+use vitonomi_core::protocol::wire::mx_relay_push::MxRelayId;
 
 use crate::dispatch::alias_lookup::AliasLookup;
 use crate::dispatch::hub_push::dispatch;
 use crate::hub_client::HubClient;
-use crate::identity::RelayIdentity;
+use crate::identity::MxRelayIdentity;
 use crate::operability::Metrics;
 use crate::smtp::encryptor_stream::EncryptorStream;
 
@@ -37,8 +37,8 @@ use crate::smtp::encryptor_stream::EncryptorStream;
 /// either immutable or internally synchronized.
 #[derive(Clone)]
 pub struct SharedState {
-    pub identity: Arc<RelayIdentity>,
-    pub relay_id: RelayId,
+    pub identity: Arc<MxRelayIdentity>,
+    pub mx_relay_id: MxRelayId,
     pub hub_client: HubClient,
     pub alias_lookup: AliasLookup,
     pub metrics: Metrics,
@@ -154,7 +154,7 @@ impl Handler for MxHandler {
                     &alias_handle,
                     &namespace,
                     &shared.base_domain,
-                    shared.relay_id,
+                    shared.mx_relay_id,
                     &shared.identity,
                     &shared.hub_client,
                     &shared.alias_lookup,

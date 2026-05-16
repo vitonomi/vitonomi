@@ -8,7 +8,7 @@ pub mod bootstrap;
 pub mod data_plane;
 pub mod domains;
 pub mod login;
-pub mod relay_push;
+pub mod mx_relay_push;
 pub mod rendezvous;
 pub mod subdomains;
 pub mod vault_bus;

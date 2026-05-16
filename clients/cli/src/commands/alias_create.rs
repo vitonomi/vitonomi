@@ -61,10 +61,18 @@ pub async fn run<P: Prompts + ?Sized>(
     let (alias_handle, namespace) = AliasMetadata::parse_address(&args.address)
         .map_err(|e| anyhow!("alias.address_invalid: {e}"))?;
 
-    // Open a record session — needed to verify namespace ownership
-    // (we read local `Domain` records to confirm) AND to write the
-    // new alias record after publishing.
-    let lib = library_session::open(cfg, args.state_path, prompts).await?;
+    // Unseal master secrets ONCE — used both for the record session
+    // below and for signing the AliasDirectoryEntry via identity_sk.
+    let password = prompts.password("Password", false)?;
+    let secrets = decrypt_with_password(password.as_bytes(), &st.encrypted_key_blob)
+        .map_err(|e| anyhow!("decrypt key blob (wrong password?): {e}"))?;
+    let identity_sk = MlDsa65SecretKey(secrets.identity.0.clone());
+    let identity_pk = vitonomi_core::crypto::pq::ml_dsa_65_signing_pubkey_from_seed(&identity_sk)
+        .map_err(|e| anyhow!("derive identity pubkey: {e}"))?;
+
+    // Open a record session with the already-unsealed secrets so we
+    // don't prompt the user a second time.
+    let lib = library_session::open_with_secrets(cfg, args.state_path, &secrets).await?;
 
     // PRIVACY CHECK: namespace MUST be a domain the cluster owns.
     let owned = lib
@@ -84,14 +92,6 @@ pub async fn run<P: Prompts + ?Sized>(
         ));
     }
 
-    // Re-prompt password and unseal keys.
-    let password = prompts.password("Password", false)?;
-    let secrets = decrypt_with_password(password.as_bytes(), &st.encrypted_key_blob)
-        .map_err(|e| anyhow!("decrypt key blob (wrong password?): {e}"))?;
-    let identity_sk = MlDsa65SecretKey(secrets.identity.0.clone());
-    let identity_pk = vitonomi_core::crypto::pq::ml_dsa_65_signing_pubkey_from_seed(&identity_sk)
-        .map_err(|e| anyhow!("derive identity pubkey: {e}"))?;
-
     // Generate a fresh ML-KEM-768 keypair for this alias.
     let kem_kp = ml_kem_768_keypair().context("generate alias KEM keypair")?;
     let alias_kem_secret_bytes = MlKem768SecretKeyBytes(kem_kp.secret.0.clone());
@@ -108,24 +108,23 @@ pub async fn run<P: Prompts + ?Sized>(
         .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0);
 
-    // Sign the directory entry's pubkey under the user identity.
-    let mut sig_msg = Vec::with_capacity(64 + kem_kp.public.0.len());
-    sig_msg.extend_from_slice(b"vitonomi/alias_pubkey/v1");
-    sig_msg.extend_from_slice(alias_handle.as_bytes());
-    sig_msg.push(b'@');
-    sig_msg.extend_from_slice(namespace.as_bytes());
-    sig_msg.extend_from_slice(&kem_kp.public.0);
-    let sig_user = ml_dsa_65_sign(&identity_sk, &sig_msg).context("sign alias pubkey")?;
-
-    // 1. Publish the directory entry to the hub.
-    let dir_entry = AliasDirectoryEntry {
+    // 1. Build the directory entry with a placeholder signature,
+    //    compute the canonical signed bytes via the wire-type
+    //    helper, then overwrite `sig_user` with the real signature.
+    //    Hub-side verify recomputes the same bytes.
+    let mut dir_entry = AliasDirectoryEntry {
         alias_handle: alias_handle.clone(),
         namespace: namespace.clone(),
         alias_id,
         alias_kem_pubkey: kem_kp.public.clone(),
         user_identity_pubkey: identity_pk,
-        sig_user: sig_user.clone(),
+        sig_user: vitonomi_core::crypto::pq::MlDsa65Signature(vec![]),
     };
+    let signed = dir_entry
+        .signed_bytes()
+        .context("encode AliasDirectoryEntry signed bytes")?;
+    let sig_user = ml_dsa_65_sign(&identity_sk, &signed).context("sign alias pubkey")?;
+    dir_entry.sig_user = sig_user.clone();
     let client = hub_client::default_client()?;
     hub_client::publish_alias_pubkey(&client, &cfg.hub.url, &token.0, &dir_entry).await?;
 

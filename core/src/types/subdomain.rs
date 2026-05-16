@@ -11,8 +11,7 @@
 //!
 //! The user's `username` (login identifier) MUST NOT appear in
 //! any public DNS namespace. [`Subdomain::parse_against_username`]
-//! enforces this client-side. **The hub does not re-check** (per
-//! the Phase 7 design decision documented in
+//! enforces this client-side. **The hub does not re-check** (see
 //! `docs/threat-model.md#relaxed_posture.client_side_username_check_only`)
 //! — the trade-off is that a patched / malicious client could
 //! bypass and claim its own username; the worst case is the user
@@ -23,8 +22,8 @@
 //! [`is_reserved_subdomain`] is the security-critical hard-coded
 //! reject list (`www`, `mail`, `mx`, `smtp`, `app`, `api`, `hub`,
 //! `admin`, `support`, `help`, `info`, `abuse`, `postmaster`,
-//! `noreply`). A separate, optional advisory list (paid-tier
-//! dictionary words) lands hub-side in Slice 5 of Phase 7.
+//! `noreply`). A separate, optional advisory list of paid-tier
+//! dictionary words is future-work on the hub side.
 
 use std::fmt;
 
@@ -66,11 +65,10 @@ pub fn is_reserved_subdomain(s: &str) -> bool {
 }
 
 /// Advisory policy classification for a parsed [`Subdomain`].
-/// Phase 7 defaults every claim to [`SubdomainPolicy::Free`];
-/// paid-tier mechanics + the dictionary list are a Slice 5
-/// hub-side follow-up. Kept here as a typed seam so the CLI can
-/// surface the eventual paid-tier upsell flow without further
-/// API churn.
+/// Every claim today is [`SubdomainPolicy::Free`]; paid-tier
+/// mechanics and the dictionary list are future-work on the hub.
+/// Kept here as a typed seam so the CLI can surface the eventual
+/// paid-tier upsell flow without further API churn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubdomainPolicy {
     Free,
@@ -82,8 +80,9 @@ pub enum SubdomainPolicy {
 /// [`Free`]: SubdomainPolicy::Free
 #[must_use]
 pub fn classify(_sub: &Subdomain) -> SubdomainPolicy {
-    // Slice 5 hub-side follow-up wires the dictionary list. For
-    // now every accepted subdomain is free.
+    // TODO: future-work — wire an advisory hub-side dictionary
+    // list for paid-tier names. Today every accepted subdomain is
+    // free.
     SubdomainPolicy::Free
 }
 
@@ -194,8 +193,7 @@ pub fn full_domain(sub: &Subdomain, base: &str) -> String {
 /// Signed user-side claim of a subdomain on a configured base
 /// domain. The hub stores this verbatim for verification + public
 /// lookups; the user's vault writes a corresponding `Domain`
-/// record (Slice 6) to the snapshot chain so the claim survives
-/// hub loss.
+/// record to the snapshot chain so the claim survives hub loss.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubdomainClaim {
     pub format_version: FormatVersion,
@@ -402,11 +400,10 @@ mod tests {
 
     #[test]
     fn subdomain_dictionary_words_flagged_paid_tier() {
-        // Phase 7 MVP scope: every accepted subdomain is Free.
-        // Slice 5 hub-side follow-up wires an advisory dictionary
-        // list. Until then, this test pins the contract that the
-        // classifier exists and returns Free for everything that
-        // parses.
+        // Every accepted subdomain is Free today. An advisory
+        // hub-side dictionary list is future-work; this test pins
+        // the contract that the classifier exists and returns
+        // Free for everything that parses.
         let sub = Subdomain::parse("inbox-demo").unwrap();
         assert_eq!(classify(&sub), SubdomainPolicy::Free);
     }

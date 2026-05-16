@@ -4,10 +4,10 @@
 //! `<state_dir>/heads/<record_type-byte:02x>.bin`. Files are mode
 //! 0600, atomically replaced via `.tmp` + rename.
 //!
-//! Slice 4 swaps this for a hub HTTP-backed transport with rollback-
-//! protected `PUT`s. For slice 3 (single-vault MVP) the local file
-//! is the canonical store; the user just shouldn't run the CLI on
-//! two machines concurrently against the same head set.
+//! A hub HTTP-backed transport with rollback-protected `PUT`s is
+//! future-work. For single-vault MVP usage the local file is the
+//! canonical store; the user just shouldn't run the CLI on two
+//! machines concurrently against the same head set.
 
 use std::fs;
 use std::io::Write as _;

@@ -46,13 +46,15 @@ pub enum Command {
     /// Credential operations (typed wrapper around Record + the
     /// per-RecordType `CredentialMetadata`/`CredentialBody` schemas).
     Credential(CredentialCmd),
-    /// Subdomain (managed-base) claim / release / list. Phase 7.
+    /// Subdomain (managed-base) claim / release / list.
     Subdomain(SubdomainCmd),
     /// Email alias create / list / disable / delete + inbox poll +
-    /// per-message read / mark-read / search. Phase 7.
+    /// per-message read / mark-read / search.
     Alias(AliasCmd),
-    /// Custom-domain (BYO) add / verify / list / remove. Phase 7.
+    /// User-owned domain (DNS-verified) add / verify / list / remove.
     Domain(DomainCmd),
+    /// `vitonomi-mx` (mx-relay) operator surface — admin-only.
+    Mx(MxCmd),
     /// Cross-RecordType universal search.
     Search {
         query: String,
@@ -332,7 +334,7 @@ pub enum AliasAction {
     /// List every alias the cluster owns. Metadata-only.
     List,
     /// Disable an alias (keeps the directory entry but flips
-    /// `active=false` so the relay silent-drops new mail).
+    /// `active=false` so the mx relay silent-drops new mail).
     Disable { id: String },
     /// Tombstone an alias entirely. The hub revokes the directory
     /// entry; queued envelopes are GC'd.
@@ -362,6 +364,28 @@ pub enum AliasAction {
         query: String,
         #[arg(long, default_value_t = 50)]
         limit: usize,
+    },
+}
+
+#[derive(Debug, clap::Args)]
+pub struct MxCmd {
+    #[command(subcommand)]
+    pub action: MxAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MxAction {
+    /// Register a `vitonomi-mx` relay identity with the hub.
+    /// Admin-only — uses the current session or prompts for the
+    /// admin password if the session is missing / expired.
+    Register {
+        /// Hex-encoded ML-DSA-65 pubkey from `vitonomi-mx pubkey`.
+        #[arg(long)]
+        pubkey: String,
+        /// One or more allowed namespaces. Repeat the flag:
+        /// `--namespace vito.gg --namespace example.com`.
+        #[arg(long, required = true)]
+        namespace: Vec<String>,
     },
 }
 
@@ -810,6 +834,7 @@ where
                             subdomain: name,
                             base_domain: domain,
                         },
+                        &mut prompts,
                     )
                     .await
                 }
@@ -937,6 +962,7 @@ where
         Command::Domain(d) => {
             let cfg = CliConfig::load(Some(&config_path))?;
             let state_path = state::resolve_state_path(state_dir_from_cfg(&cfg).as_deref())?;
+            let mut prompts = InteractivePrompts;
             match d.action {
                 DomainAction::Add { domain } => {
                     commands::domain_add::run(
@@ -945,6 +971,7 @@ where
                             state_path: &state_path,
                             domain,
                         },
+                        &mut prompts,
                     )
                     .await
                 }
@@ -955,6 +982,7 @@ where
                             state_path: &state_path,
                             domain,
                         },
+                        &mut prompts,
                     )
                     .await
                 }
@@ -964,6 +992,7 @@ where
                         commands::domain_list::DomainListArgs {
                             state_path: &state_path,
                         },
+                        &mut prompts,
                     )
                     .await
                 }
@@ -974,11 +1003,31 @@ where
                             state_path: &state_path,
                             domain,
                         },
+                        &mut prompts,
                     )
                     .await
                 }
             }
         }
+        Command::Mx(m) => match m.action {
+            MxAction::Register { pubkey, namespace } => {
+                let cfg = CliConfig::load(Some(&config_path))?;
+                let state_path = state::resolve_state_path(state_dir_from_cfg(&cfg).as_deref())?;
+                let mut prompts = InteractivePrompts;
+                commands::mx_register::run(
+                    &cfg,
+                    commands::mx_register::MxRegisterArgs {
+                        state_path: &state_path,
+                        pubkey_hex: pubkey,
+                        namespaces: namespace,
+                        lookup_argon2:
+                            vitonomi_core::crypto::lookup_id::LookupIdParams::default_for_env(),
+                    },
+                    &mut prompts,
+                )
+                .await
+            }
+        },
         Command::Search {
             query,
             r#type,

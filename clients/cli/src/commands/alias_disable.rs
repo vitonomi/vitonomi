@@ -1,6 +1,6 @@
 //! `vitonomi-cli alias disable <id>` — flip the alias's
-//! `active` flag to false. Keeps the directory entry so the relay
-//! can decide silent-drop vs reject.
+//! `active` flag to false. Keeps the directory entry so the mx
+//! relay can decide silent-drop vs reject.
 
 use std::path::Path;
 

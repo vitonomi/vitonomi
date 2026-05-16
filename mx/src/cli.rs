@@ -1,13 +1,13 @@
 //! clap-driven CLI for `vitonomi-mx`.
 //!
-//! Slice 0 wires `init` (write default `mx.toml`), `start`
-//! (currently a stub returning "not implemented"), and `status`
-//! (print the loaded config). Slice 7 fills `start` with the SMTP
-//! receiver + signed hub-push pipeline.
+//! Subcommands:
+//! - `init` writes the default `mx.toml` and mints the identity;
+//! - `start` boots the SMTP receiver + signed hub-push pipeline;
+//! - `status` prints the loaded config without booting;
+//! - `pubkey` re-prints the relay's pubkey hex on demand.
 
 use std::path::PathBuf;
 
-use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -33,22 +33,21 @@ pub enum Command {
         /// SMTP listen port (default 25).
         #[arg(long)]
         port: Option<u16>,
-        /// Base domain the relay is authoritative for
+        /// Base domain the mx relay is authoritative for
         /// (e.g. `vito.gg`).
         #[arg(long)]
         base: Option<String>,
-        /// Hub URL the relay pushes inbound ciphertext to.
+        /// Hub URL the mx relay pushes inbound ciphertext to.
         #[arg(long)]
         hub: Option<String>,
-        /// Persistent data dir (relay identity, dev cert, …).
+        /// Persistent data dir (mx-relay identity, dev cert, …).
         #[arg(long)]
         data_dir: Option<PathBuf>,
         /// Overwrite an existing config file.
         #[arg(long)]
         force: bool,
     },
-    /// Start the SMTP receiver. Slice 0 stub: returns an error.
-    /// Slice 7 wires the real pipeline.
+    /// Start the SMTP receiver and the signed hub-push pipeline.
     Start {
         #[arg(long)]
         port: Option<u16>,
@@ -65,6 +64,13 @@ pub enum Command {
         bind_addr: Option<String>,
         #[arg(long)]
         port: Option<u16>,
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+    /// Print the relay's ML-DSA-65 public key in hex. Mints the
+    /// identity on first call. Pipe into `vitonomi-cli mx register
+    /// --pubkey ...` on the admin's machine.
+    Pubkey {
         #[arg(long)]
         data_dir: Option<PathBuf>,
     },
@@ -86,7 +92,7 @@ pub async fn run_cli() -> anyhow::Result<()> {
             hub,
             data_dir,
             force,
-        } => crate::config::write_default_config(
+        } => crate::commands::init::run(
             args.config.as_deref(),
             crate::config::InitOverrides {
                 bind_addr,
@@ -96,8 +102,7 @@ pub async fn run_cli() -> anyhow::Result<()> {
                 hub_url: hub,
             },
             force,
-        )
-        .context("write default config"),
+        ),
         Command::Start {
             port,
             bind_addr,
@@ -130,6 +135,16 @@ pub async fn run_cli() -> anyhow::Result<()> {
                 },
             )?;
             crate::commands::status::run(&cfg)
+        }
+        Command::Pubkey { data_dir } => {
+            let cfg = crate::config::MxConfig::load(
+                args.config.as_deref(),
+                crate::config::CliOverrides {
+                    data_dir,
+                    ..Default::default()
+                },
+            )?;
+            crate::commands::pubkey::run(&cfg)
         }
     }
 }

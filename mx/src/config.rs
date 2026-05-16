@@ -1,10 +1,9 @@
 //! Layered config: defaults → TOML file → env (`VITONOMI_MX_*`) →
 //! CLI overrides. Loaded by [`MxConfig::load`].
 //!
-//! Slice 0 ships only the fields needed by `init` / `status`
-//! (hub URL, base domain, bind addr/port, data dir, logging).
-//! Slice 7 will extend with `accept_subdomain_bases`,
-//! `accept_custom_domains`, TLS cert paths, etc.
+//! Fields today: hub URL, base domain, bind addr/port, data dir,
+//! TLS PEM paths, logging. Multi-base / multi-domain acceptance
+//! lists are future-work.
 
 use std::path::{Path, PathBuf};
 
@@ -24,8 +23,6 @@ pub struct MxConfig {
     #[serde(default)]
     pub tls: TlsConfig,
     #[serde(default)]
-    pub relay: RelayConfig,
-    #[serde(default)]
     pub logging: LoggingConfig,
 }
 
@@ -41,14 +38,6 @@ pub struct TlsConfig {
     pub key_pem: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RelayConfig {
-    /// Hex-encoded 16-byte `RelayId` issued by the hub on
-    /// `POST /v1/admin/relays`. Empty until first registration.
-    #[serde(default)]
-    pub id_hex: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     /// SMTP listen address. Production binds `0.0.0.0` on port 25;
@@ -57,25 +46,23 @@ pub struct ServerConfig {
     /// SMTP listen port. Default 25 in production; 0 = ephemeral
     /// (kernel-picked) in tests.
     pub port: u16,
-    /// Base domain the relay is authoritative for (e.g.
-    /// `vito.gg` or `inbox.example.com`). Slice 7 will widen
-    /// this into a `Vec<String>` for multi-base relays plus a
-    /// separate `accept_custom_domains` list; for now a single
-    /// base is enough to scaffold the binary.
+    /// Base domain the mx relay is authoritative for (e.g.
+    /// `vito.gg` or `inbox.example.com`). A single base today;
+    /// multi-base + separate `accept_domains` list are future-work.
     pub base_domain: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HubConfig {
-    /// HTTPS URL of the hub the relay pushes inbound ciphertext
+    /// HTTPS URL of the hub the mx relay pushes inbound ciphertext
     /// to (e.g. `https://hub.vitonomi.com`).
     pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathsConfig {
-    /// Persistent state — relay ML-DSA-65 identity (slice 7),
-    /// dev TLS cert (slice 7), small caches.
+    /// Persistent state — mx-relay ML-DSA-65 identity, dev TLS
+    /// cert, small caches.
     pub data_dir: PathBuf,
 }
 
@@ -200,7 +187,6 @@ fn default_config() -> MxConfig {
             data_dir: default_data_dir(),
         },
         tls: TlsConfig::default(),
-        relay: RelayConfig::default(),
         logging: LoggingConfig {
             level: default_level(),
             format: default_format(),

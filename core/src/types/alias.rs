@@ -1,18 +1,17 @@
-//! Alias schemas — the Phase 7 mail-receiving primitive.
+//! Alias schemas — the mail-receiving primitive.
 //!
 //! Each alias is one email address (`<alias_handle>@<namespace>`)
-//! with its own ML-KEM-768 keypair. The relay encrypts inbound
+//! with its own ML-KEM-768 keypair. The mx relay encrypts inbound
 //! mail to the alias's published pubkey via
-//! [`crate::crypto::alias_inbound`] (Slice 4); the user fetches
-//! ciphertext envelopes from the per-alias inbound queue and
-//! decapsulates with the alias secret key from [`AliasBody`].
+//! [`crate::crypto::alias_inbound`]; the user fetches ciphertext
+//! envelopes from the per-alias inbound queue and decapsulates with
+//! the alias secret key from [`AliasBody`].
 //!
 //! The `namespace` field is a plain `String` (the full domain
 //! the address lives under, e.g. `inbox-demo.vito.gg` or
-//! `example.com`). Discrimination between vito-managed
-//! subdomains and user-owned custom domains lives on the
-//! `Domain` record type (Slice 6) — the alias does not need to
-//! know.
+//! `example.com`). Discrimination between vitonomi-managed
+//! subdomains and user-owned DNS-verified domains lives on the
+//! `Domain` record type — the alias does not need to know.
 
 use std::borrow::Cow;
 
@@ -46,7 +45,7 @@ pub struct AliasMetadata {
     pub namespace: String,
     /// Optional human label.
     pub label: Option<String>,
-    /// ML-KEM-768 public key the relay encrypts inbound mail
+    /// ML-KEM-768 public key the mx relay encrypts inbound mail
     /// to. The matching secret key lives in [`AliasBody`].
     pub alias_kem_pubkey: MlKem768PublicKey,
     /// User signature binding the pubkey to this alias slot
@@ -62,9 +61,8 @@ pub struct AliasMetadata {
     pub created_at_ms: u64,
 }
 
-/// Inbound-mail acceptance policy. Slice 7 of Phase 7 wires
-/// each value into the relay's RCPT-time decision (along with
-/// SPF/DKIM/DMARC).
+/// Inbound-mail acceptance policy. Wired into the mx relay's
+/// RCPT-time decision (along with SPF/DKIM/DMARC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SpamPolicy {
@@ -127,7 +125,7 @@ impl AliasMetadata {
     ///
     /// `ValidationError::Other` for missing `@`, empty
     /// alias_handle, or empty namespace. The domain is not
-    /// validated for DNS legality here — that's the relay's
+    /// validated for DNS legality here — that's the mx relay's
     /// concern at RCPT time and the hub's concern at directory
     /// publish time.
     pub fn parse_address(s: &str) -> Result<(String, String), ValidationError> {

@@ -42,7 +42,7 @@ pub fn admin_chain_dir(data_dir: &Path) -> PathBuf {
 }
 
 /// `<data_dir>/cluster_shared_key.bin` — the AEAD key used to seal
-/// chain inner payloads, vault names, and (Phase 1+) records. Written
+/// chain inner payloads, vault names, and records. Written
 /// during `accept` after the vault opens the invite's
 /// `sealed_cluster_key`.
 #[must_use]

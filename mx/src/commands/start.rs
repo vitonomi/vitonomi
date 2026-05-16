@@ -2,7 +2,7 @@
 //! signed-push pipeline and serve.
 //!
 //! Steps at boot:
-//! 1. Load / generate the relay's ML-DSA-65 identity from
+//! 1. Load / generate the mx-relay's ML-DSA-65 identity from
 //!    `<data_dir>/identity.bin`.
 //! 2. Resolve the wildcard TLS cert (rcgen-generated in dev,
 //!    operator-supplied PEMs in prod).
@@ -16,8 +16,7 @@ use std::net::ToSocketAddrs as _;
 
 use anyhow::{anyhow, Context as _};
 
-use vitonomi_core::encoding::hex_decode;
-use vitonomi_core::protocol::wire::relay_push::RelayId;
+use vitonomi_core::protocol::wire::mx_relay_push::MxRelayId;
 
 use crate::config::MxConfig;
 use crate::dispatch::alias_lookup::AliasLookup;
@@ -37,9 +36,17 @@ use crate::tls::resolve as resolve_tls;
 /// Any of the bootstrap steps (identity, TLS, hub-client,
 /// SMTP serve) can fail.
 pub async fn run(cfg: MxConfig) -> anyhow::Result<()> {
+    // `reqwest`'s `rustls-tls` feature pulls in rustls with the
+    // `aws-lc-rs` provider, while our own `rustls` dep enables
+    // `ring`. With two providers in scope, rustls 0.23+ refuses
+    // to auto-pick a process default and panics on first TLS
+    // use. Pin `ring` here (idempotent — returns `Err` if already
+    // installed, which we deliberately ignore).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     state_dir::ensure_data_dir(&cfg.paths.data_dir)?;
     let identity = std::sync::Arc::new(load_or_generate(&cfg.paths.data_dir)?);
-    tracing::info!(base_domain = %cfg.server.base_domain, "loaded relay identity");
+    tracing::info!(base_domain = %cfg.server.base_domain, "loaded mx-relay identity");
 
     let _tls = resolve_tls(
         &cfg.paths.data_dir,
@@ -59,8 +66,10 @@ pub async fn run(cfg: MxConfig) -> anyhow::Result<()> {
         std::path::PathBuf::from(&cfg.tls.key_pem)
     };
 
-    let relay_id = parse_relay_id(&cfg.relay.id_hex)
-        .context("relay.id_hex (run `vitonomi-mx register` after admin issues a RelayId)")?;
+    // `MxRelayId` is derived deterministically from the pubkey —
+    // the hub computes the same value on registration, so there's
+    // nothing to persist locally besides identity.bin itself.
+    let mx_relay_id = MxRelayId::from_pubkey(&identity.public);
 
     let hub = HubClient::new(&cfg.hub.url).context("build hub client")?;
     let alias_lookup = AliasLookup::new(hub.clone());
@@ -68,7 +77,7 @@ pub async fn run(cfg: MxConfig) -> anyhow::Result<()> {
 
     let shared = SharedState {
         identity,
-        relay_id,
+        mx_relay_id,
         hub_client: hub,
         alias_lookup,
         metrics,
@@ -90,22 +99,4 @@ pub async fn run(cfg: MxConfig) -> anyhow::Result<()> {
         server::serve(addr, &cfg.server.base_domain, &cert_path, &key_path, shared)
     });
     serve_fut.await.context("smtp serve task")?
-}
-
-fn parse_relay_id(hex: &str) -> anyhow::Result<RelayId> {
-    if hex.is_empty() {
-        return Err(anyhow!(
-            "relay.id_hex is empty — register the relay's identity with the hub first"
-        ));
-    }
-    let bytes = hex_decode(hex).map_err(|e| anyhow!("relay.id_hex hex decode: {e}"))?;
-    if bytes.len() != 16 {
-        return Err(anyhow!(
-            "relay.id_hex must decode to 16 bytes, got {}",
-            bytes.len()
-        ));
-    }
-    let mut out = [0u8; 16];
-    out.copy_from_slice(&bytes);
-    Ok(RelayId(out))
 }

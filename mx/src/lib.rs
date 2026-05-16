@@ -6,12 +6,8 @@
 //! ciphertext envelope to the user's hub. Plaintext never reaches
 //! the disk and never appears in logs.
 //!
-//! See `../docs/architecture.md` for the relay's place in the
-//! trust topology and `../PROJECT.md` Phase 7 for the full
-//! deliverable list. Phase 7 is built incrementally per
-//! `~/.claude/plans/ancient-wishing-comet.md`; this slice (Slice
-//! 0) ships only the crate scaffold + `init` / `start` (stub) /
-//! `status` subcommands.
+//! See `../docs/architecture.md` for the mx relay's place in the
+//! trust topology and `../PROJECT.md` for the deliverable list.
 
 #![forbid(unsafe_code)]
 

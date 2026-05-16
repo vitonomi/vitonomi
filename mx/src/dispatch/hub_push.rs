@@ -10,7 +10,7 @@
 //!    plaintext is dropped + zeroized.
 //! 2. AEAD-seal the plaintext to the alias pubkey via
 //!    [`vitonomi_core::crypto::alias_inbound::seal_to_alias`].
-//! 3. Sign the resulting `SignedRelayPush` with the relay's
+//! 3. Sign the resulting `SignedMxRelayPush` with the mx-relay's
 //!    ML-DSA-65 secret key.
 //! 4. POST `/v1/mx/messages`. Hub may also return
 //!    `received: false` (defense in depth) — treat the same
@@ -22,19 +22,17 @@ use anyhow::Context as _;
 
 use vitonomi_core::crypto::alias_inbound::seal_to_alias;
 use vitonomi_core::crypto::pq::{ml_dsa_65_sign, MlDsa65Signature};
-use vitonomi_core::protocol::wire::relay_push::{
-    RelayId, SignedRelayPush,
-};
+use vitonomi_core::protocol::wire::mx_relay_push::{MxRelayId, SignedMxRelayPush};
 
 use crate::dispatch::alias_lookup::AliasLookup;
 use crate::hub_client::HubClient;
-use crate::identity::RelayIdentity;
+use crate::identity::MxRelayIdentity;
 use crate::operability::Metrics;
 
 /// One-shot dispatch of an inbound mail. Returns `true` iff
 /// the mail was queued at the hub; `false` iff it was silent-
 /// dropped (unknown alias). Either way, the metrics are
-/// updated under the relay's configured base domain.
+/// updated under the mx-relay's configured base domain.
 ///
 /// # Errors
 ///
@@ -47,8 +45,8 @@ pub async fn dispatch(
     alias_handle: &str,
     namespace: &str,
     base_domain: &str,
-    relay_id: RelayId,
-    identity: &RelayIdentity,
+    mx_relay_id: MxRelayId,
+    identity: &MxRelayIdentity,
     hub_client: &HubClient,
     alias_lookup: &AliasLookup,
     metrics: &Metrics,
@@ -84,22 +82,22 @@ pub async fn dispatch(
     drop(plaintext);
 
     // 3. Build + sign the push.
-    let mut push = SignedRelayPush {
-        relay_id,
+    let mut push = SignedMxRelayPush {
+        mx_relay_id,
         alias_directory_lookup: (alias_handle.to_string(), namespace.to_string()),
         envelope,
         server_received_at_ms: received_at_ms,
-        sig_relay: MlDsa65Signature(vec![]),
+        sig_mx_relay: MlDsa65Signature(vec![]),
     };
     let signed_bytes = push.signed_bytes().context("signed_bytes")?;
-    push.sig_relay =
-        ml_dsa_65_sign(&identity.secret, &signed_bytes).context("sign relay push")?;
+    push.sig_mx_relay =
+        ml_dsa_65_sign(&identity.secret, &signed_bytes).context("sign mx-relay push")?;
 
     // 4. POST.
     let ack = hub_client
-        .relay_push_inbound(&push)
+        .mx_relay_push_inbound(&push)
         .await
-        .context("relay_push_inbound")?;
+        .context("mx_relay_push_inbound")?;
     if ack.received {
         metrics.record_accepted(base_domain, plaintext_len);
         Ok(true)

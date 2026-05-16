@@ -23,10 +23,10 @@
 //! b"vitonomi/alias_inbound/v1" || alias_id(16) || received_at_ms(8 le)
 //! ```
 //!
-//! - `alias_id` binding prevents cross-alias substitution: a
-//!   relay-adjacent attacker can't replay one alias's envelope
+//! - `alias_id` binding prevents cross-alias substitution: an
+//!   mx-relay-adjacent attacker can't replay one alias's envelope
 //!   to a different alias slot.
-//! - `received_at_ms` binding prevents the relay from
+//! - `received_at_ms` binding prevents the mx relay from
 //!   re-stating an old envelope under a new server timestamp at
 //!   the hub-push step. The user's client passes both values
 //!   into [`open_from_alias`]; mismatch fails AEAD-open.

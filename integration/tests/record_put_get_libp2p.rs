@@ -9,7 +9,7 @@
 //! introducing the multiaddr (which we hand to the client directly
 //! here) and serving public user-pubkey lookups (which we wire via an
 //! in-test fixed resolver). The control-plane handshake is already
-//! covered by `mini_mvp.rs`.
+//! covered by `cluster_bootstrap_e2e.rs`.
 
 use std::sync::Arc;
 use std::time::Duration;

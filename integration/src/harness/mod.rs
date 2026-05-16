@@ -9,7 +9,7 @@
 //!
 //! `harness::transport::CountingChunkTransport` decorates any
 //! `ChunkTransport` and records every put/get operation — used by
-//! the metadata-only-fetch assertions in Phase 6's tests.
+//! the metadata-only-fetch assertions in the credentials tests.
 
 pub mod admin;
 pub mod hub;
@@ -19,6 +19,6 @@ pub mod vault;
 
 pub use admin::{run_cluster_create, run_vault_invite, setup_admin, AdminContext};
 pub use hub::boot_hub;
-pub use params::{dummy_fingerprint, fast_keyblob_params, fast_lookup_params};
+pub use params::{fast_keyblob_params, fast_lookup_params, placeholder_hub_fingerprint};
 pub use transport::{CountingChunkTransport, OpEvent};
 pub use vault::{setup_and_accept_vault, setup_and_accept_vault_with, VaultContext, VaultSetupOpts};

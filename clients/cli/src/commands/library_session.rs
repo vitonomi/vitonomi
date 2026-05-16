@@ -8,6 +8,7 @@ use std::path::Path;
 
 use anyhow::Context as _;
 
+use vitonomi_core::crypto::keys::MasterSecretKeys;
 use vitonomi_core::record::RecordType;
 use vitonomi_core::search::LibraryIndex;
 
@@ -31,9 +32,8 @@ impl LibrarySession {
 /// Open a record session and build a `LibraryIndex` over every
 /// RecordType currently wired into the search registry.
 ///
-/// In Phase 6 only `Credential` is wired (Phase 7 adds `Alias` /
-/// `AliasMessage`). The list here is the single source of truth
-/// for "which types contribute to universal search".
+/// The list returned by `indexed_types` is the single source of
+/// truth for "which RecordTypes contribute to universal search".
 ///
 /// # Errors
 ///
@@ -44,6 +44,25 @@ pub async fn open<P: Prompts + ?Sized>(
     prompts: &mut P,
 ) -> anyhow::Result<LibrarySession> {
     let session = record_session::open(cfg, state_path, prompts).await?;
+    let index = LibraryIndex::populate(&session.record_store, indexed_types())
+        .await
+        .context("populate LibraryIndex")?;
+    Ok(LibrarySession { session, index })
+}
+
+/// Variant of [`open`] that reuses already-unsealed `MasterSecretKeys`.
+/// Use this when a command has already unsealed the key blob for
+/// client-side signing and wants to avoid a second password prompt.
+///
+/// # Errors
+///
+/// Underlying network / crypto / decode failures.
+pub async fn open_with_secrets(
+    cfg: &CliConfig,
+    state_path: &Path,
+    secrets: &MasterSecretKeys,
+) -> anyhow::Result<LibrarySession> {
+    let session = record_session::open_with_secrets(cfg, state_path, secrets).await?;
     let index = LibraryIndex::populate(&session.record_store, indexed_types())
         .await
         .context("populate LibraryIndex")?;

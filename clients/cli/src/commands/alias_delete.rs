@@ -45,7 +45,7 @@ pub async fn run<P: Prompts + ?Sized>(
         .ok_or_else(|| anyhow!("alias {} not found", id.to_hex()))?;
     let m = AliasMetadata::from_metadata_bytes(&meta_bytes).context("decode alias metadata")?;
 
-    // Revoke the directory entry first so the relay stops accepting
+    // Revoke the directory entry first so the mx relay stops accepting
     // mail; then tombstone the local record.
     let client = hub_client::default_client()?;
     hub_client::revoke_alias_pubkey(&client, &cfg.hub.url, &token.0, &m.alias_handle, &m.namespace)

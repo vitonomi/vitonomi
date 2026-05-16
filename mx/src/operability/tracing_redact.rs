@@ -4,8 +4,8 @@
 //! `mailin-embedded` and other SMTP libraries occasionally emit
 //! diagnostic logs containing recipient addresses or session
 //! state. This layer drops or redacts those fields so the
-//! `relay_privacy_assertion` integration test (Slice 9) finds no
-//! per-message PII in the relay's tracing output.
+//! mx-relay's tracing output is free of per-message PII (verified
+//! by the `relay_privacy_assertion` integration test).
 //!
 //! The implementation is intentionally simple: a `Visit` impl
 //! that intercepts every recorded field, checks whether the
@@ -131,7 +131,7 @@ mod tests {
         assert!(!should_redact_field("base_domain"));
         assert!(!should_redact_field("bytes"));
         assert!(!should_redact_field("seq"));
-        assert!(!should_redact_field("relay_id"));
+        assert!(!should_redact_field("mx_relay_id"));
         assert!(!should_redact_field("alias_id"));
         assert!(!should_redact_field("status"));
     }

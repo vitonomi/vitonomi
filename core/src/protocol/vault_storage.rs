@@ -57,7 +57,8 @@ pub trait VaultStorage: Send + Sync {
     async fn has_chunk(&self, address: &ChunkAddress) -> Result<bool, CoreError>;
 
     /// Sum of stored chunk sizes attributed to `owner`. Used by the
-    /// quota enforcer (Phase 9).
+    /// quota enforcer (per-user quota lands with the multi-user
+    /// admin chain work).
     async fn usage_by_user(&self, owner: UserId) -> Result<u64, CoreError>;
 
     /// List every chunk address attributed to `owner`. Linear in the

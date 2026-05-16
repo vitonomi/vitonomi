@@ -17,8 +17,8 @@ name = "vitonomi_integration"
 path = "src/lib.rs"
 
 [[test]]
-name = "mini_mvp"
-path = "tests/mini_mvp.rs"
+name = "cluster_bootstrap_e2e"
+path = "tests/cluster_bootstrap_e2e.rs"
 
 [[test]]
 name = "record_put_get_libp2p"

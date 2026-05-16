@@ -1,16 +1,16 @@
-//! HTTP client for the relay → hub control-plane surface.
+//! HTTP client for the mx-relay → hub control-plane surface.
 //!
 //! Wraps `reqwest` with rustls-tls (no system-trust-store
-//! shenanigans). Two operations Slice 7 needs:
+//! shenanigans). Two operations:
 //!
 //! 1. `lookup_alias_pubkey(alias_handle, namespace)` — public
 //!    GET against `/v1/aliases/directory/{alias}/{namespace}`.
-//! 2. `relay_push_inbound(SignedRelayPush)` — POST to
-//!    `/v1/mx/messages` with a relay-signed envelope.
+//! 2. `mx_relay_push_inbound(SignedMxRelayPush)` — POST to
+//!    `/v1/mx/messages` with an mx-relay-signed envelope.
 //!
-//! We do NOT hold a hub session token — the relay authenticates
-//! per-push via the embedded `sig_relay`. The hub looks up the
-//! relay's pubkey via `relay_id` and verifies before queueing.
+//! We do NOT hold a hub session token — the mx relay authenticates
+//! per-push via the embedded `sig_mx_relay`. The hub looks up the
+//! mx-relay's pubkey via `mx_relay_id` and verifies before queueing.
 
 use std::time::Duration;
 
@@ -18,7 +18,7 @@ use anyhow::{anyhow, Context as _};
 use reqwest::Client;
 
 use vitonomi_core::protocol::wire::aliases::AliasDirectoryEntry;
-use vitonomi_core::protocol::wire::relay_push::{RelayPushAck, SignedRelayPush};
+use vitonomi_core::protocol::wire::mx_relay_push::{MxRelayPushAck, SignedMxRelayPush};
 
 /// HTTP client for the hub. Cheap to clone (`reqwest::Client`
 /// is internally `Arc`-wrapped).
@@ -82,18 +82,18 @@ impl HubClient {
         Ok(Some(entry))
     }
 
-    /// Push a signed envelope to the hub's relay endpoint.
+    /// Push a signed envelope to the hub's mx-relay endpoint.
     ///
     /// # Errors
     ///
     /// Network / serde failures. A `received: false` ack from
     /// the hub (silent-drop on unknown alias) is returned as
-    /// `Ok` — the caller increments the relay's silent-drop
+    /// `Ok` — the caller increments the mx-relay's silent-drop
     /// counter without logging the address.
-    pub async fn relay_push_inbound(
+    pub async fn mx_relay_push_inbound(
         &self,
-        push: &SignedRelayPush,
-    ) -> anyhow::Result<RelayPushAck> {
+        push: &SignedMxRelayPush,
+    ) -> anyhow::Result<MxRelayPushAck> {
         let url = format!("{}/v1/mx/messages", self.base_url);
         let resp = self
             .inner
@@ -103,9 +103,9 @@ impl HubClient {
             .await
             .context("POST /v1/mx/messages")?;
         if !resp.status().is_success() {
-            return Err(anyhow!("relay_push_inbound returned {}", resp.status()));
+            return Err(anyhow!("mx_relay_push_inbound returned {}", resp.status()));
         }
-        let ack: RelayPushAck = resp.json().await.context("decode RelayPushAck JSON")?;
+        let ack: MxRelayPushAck = resp.json().await.context("decode MxRelayPushAck JSON")?;
         Ok(ack)
     }
 }

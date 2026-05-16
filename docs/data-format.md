@@ -941,10 +941,10 @@ DomainMetadata {
 
 ### `AliasInboundCiphertext`
 
-What the relay AEAD-seals to the alias's KEM pubkey before
+What the mx relay AEAD-seals to the alias's KEM pubkey before
 pushing to the hub. KEM-then-AEAD; the AAD binds `alias_id` and
 `server_received_at_ms` to prevent cross-alias substitution and
-relay-side timestamp replay.
+mx-relay-side timestamp replay.
 
 ```text
 AliasInboundCiphertext {
@@ -1003,21 +1003,21 @@ alias surface:
 - **`subdomain != username`** — refused at parse time by
   `Subdomain::parse_against_username`. Client-side only;
   see `threat-model.md`.
-- **Wildcard TLS at the relay** — the SMTP relay binds a single
+- **Wildcard TLS at the mx relay** — the mx relay binds a single
   `*.<base_domain>` certificate, not per-subdomain certs (which
   would leak the tenant list via Certificate Transparency
   logs). A CI gate
   (`mx::tls::tests::dev_cert_san_does_not_contain_per_subdomain_entry`)
   fails any cert SAN that looks per-subdomain.
-- **250-OK on every RCPT** — the relay returns `250 OK` for every
-  RCPT command regardless of alias existence; alias-existence
-  decisions move to `data_end` (silent-drop on miss). Plugs
-  the SMTP-RCPT enumeration channel.
-- **Per-base-domain metrics only** — relay counters key on the
+- **250-OK on every RCPT** — the mx relay returns `250 OK` for
+  every RCPT command regardless of alias existence;
+  alias-existence decisions move to `data_end` (silent-drop on
+  miss). Plugs the SMTP-RCPT enumeration channel.
+- **Per-base-domain metrics only** — mx-relay counters key on the
   configured base (e.g. `vito.gg`), never on `(alias, base)` —
-  per-alias keys would leak the relay's tenant list to anyone
+  per-alias keys would leak the mx-relay's tenant list to anyone
   scraping the metrics endpoint.
-- **No plaintext on disk, no plaintext in logs** — the SMTP
+- **No plaintext on disk, no plaintext in logs** — the mx
   relay's encryptor is a `Vec<u8>` allocated, used, and
   zeroized inside one async function whose stack frame drops
   before return. A tracing redaction layer drops sender /

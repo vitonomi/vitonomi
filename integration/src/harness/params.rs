@@ -1,7 +1,7 @@
-//! Shared Argon2id parameter profiles + dummy fingerprint used by
-//! the harness. Production profiles are too slow for CI; tests use
-//! the deliberately-cheap `m=8 MiB / t=1` profile from the
-//! `test-crypto` feature.
+//! Shared Argon2id parameter profiles + placeholder hub-cert
+//! fingerprint used by the harness. Production profiles are too
+//! slow for CI; tests use the deliberately-cheap `m=8 MiB / t=1`
+//! profile from the `test-crypto` feature.
 
 use vitonomi_core::crypto::argon2::Argon2Params;
 use vitonomi_core::crypto::lookup_id::LookupIdParams;
@@ -31,8 +31,8 @@ pub fn fast_lookup_params() -> LookupIdParams {
 
 /// 32 zero bytes encoded as the SPKI fingerprint. The hub speaks
 /// http:// in tests so the SPKI verifier is constructed but never
-/// invoked; the bytes never need to match a real cert.
+/// invoked; the bytes never need to match a real cert. Test-only.
 #[must_use]
-pub fn dummy_fingerprint() -> String {
+pub fn placeholder_hub_fingerprint() -> String {
     "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into()
 }

@@ -1,9 +1,9 @@
-//! Relay ML-DSA-65 keypair persistence.
+//! `vitonomi-mx` ML-DSA-65 keypair persistence.
 //!
 //! Generated lazily on first `vitonomi-mx start`; persisted as a
 //! 32-byte FIPS 204 seed at `<data_dir>/identity.bin` (mode
 //! 0600). The pubkey is registered with the hub via
-//! `POST /v1/admin/relays`; every signed-relay-push uses the
+//! `POST /v1/admin/mx-relays`; every signed mx-relay push uses the
 //! secret to sign the deterministic CBOR of the push fields.
 
 use std::path::Path;
@@ -16,8 +16,8 @@ use vitonomi_core::crypto::pq::{
 
 use crate::state_dir;
 
-/// The relay's identity material in memory.
-pub struct RelayIdentity {
+/// The mx-relay's identity material in memory.
+pub struct MxRelayIdentity {
     pub secret: MlDsa65SecretKey,
     pub public: MlDsa65PublicKey,
 }
@@ -27,7 +27,7 @@ pub struct RelayIdentity {
 /// # Errors
 ///
 /// File-system / crypto / perm violations.
-pub fn load_or_generate(data_dir: &Path) -> anyhow::Result<RelayIdentity> {
+pub fn load_or_generate(data_dir: &Path) -> anyhow::Result<MxRelayIdentity> {
     state_dir::ensure_data_dir(data_dir)?;
     let path = state_dir::identity_path(data_dir);
     if path.exists() {
@@ -43,11 +43,11 @@ pub fn load_or_generate(data_dir: &Path) -> anyhow::Result<RelayIdentity> {
         let secret = MlDsa65SecretKey(bytes);
         let public = ml_dsa_65_signing_pubkey_from_seed(&secret)
             .map_err(|e| anyhow!("derive public key from persisted seed: {e}"))?;
-        Ok(RelayIdentity { secret, public })
+        Ok(MxRelayIdentity { secret, public })
     } else {
         let kp = ml_dsa_65_keypair().map_err(|e| anyhow!("generate keypair: {e}"))?;
         state_dir::write_secure(&path, &kp.secret.0)?;
-        Ok(RelayIdentity {
+        Ok(MxRelayIdentity {
             secret: kp.secret,
             public: kp.public,
         })

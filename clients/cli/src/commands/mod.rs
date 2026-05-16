@@ -19,6 +19,7 @@ pub mod library_session;
 pub mod local_head_store;
 pub mod login;
 pub mod logout;
+pub mod mx_register;
 pub mod record_delete;
 pub mod record_get;
 pub mod record_list;
@@ -29,7 +30,7 @@ pub mod status;
 pub mod vault_invite;
 pub mod vault_list;
 
-// Phase 7: subdomain / alias / domain commands.
+// Subdomain / alias / domain command modules.
 pub mod alias_create;
 pub mod alias_delete;
 pub mod alias_disable;

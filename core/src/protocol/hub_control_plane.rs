@@ -27,8 +27,8 @@ use crate::protocol::wire::domains::{
 use crate::protocol::wire::login::{
     LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse, UserLookupId,
 };
-use crate::protocol::wire::relay_push::{
-    RegisterRelayRequest, RegisterRelayResponse, RelayId, RelayPushAck, SignedRelayPush,
+use crate::protocol::wire::mx_relay_push::{
+    MxRelayId, MxRelayPushAck, RegisterMxRelayRequest, SignedMxRelayPush,
 };
 use crate::protocol::wire::subdomains::SubdomainDirectoryEntry;
 use crate::record::RecordId;
@@ -220,13 +220,13 @@ pub trait HubControlPlane: Send + Sync {
         user_id: &crate::types::UserId,
     ) -> Result<crate::crypto::pq::MlDsa65PublicKey, CoreError>;
 
-    // ── Phase 7: subdomains (managed-base namespaces) ──────────
+    // ── Subdomains (managed-base namespaces) ───────────────────
 
     /// Claim a subdomain under a managed base domain. Server-
     /// side admission gate enforces format / reserved-list /
     /// taken / one-claim-per-cluster-per-base / signature.
     /// **Does not** check `subdomain == username` — that
-    /// invariant lives client-side per the Phase 7 design
+    /// invariant lives client-side
     /// (see `docs/threat-model.md#relaxed_posture.client_side_username_check_only`).
     async fn claim_subdomain(
         &self,
@@ -258,32 +258,32 @@ pub trait HubControlPlane: Send + Sync {
     /// claims under (`["vito.gg"]` for hosted vitonomi).
     async fn list_managed_base_domains(&self) -> Result<Vec<String>, CoreError>;
 
-    // ── Phase 7: custom domains (DNS-verify) ───────────────────
+    // ── User-owned domains (DNS-verified) ──────────────────────
 
-    async fn add_custom_domain(
+    async fn add_domain(
         &self,
         session_token: &SessionToken,
         domain: &str,
     ) -> Result<DomainChallenge, CoreError>;
 
-    async fn verify_custom_domain(
+    async fn verify_domain(
         &self,
         session_token: &SessionToken,
         domain: &str,
     ) -> Result<DomainVerified, CoreError>;
 
-    async fn list_custom_domains(
+    async fn list_domains(
         &self,
         session_token: &SessionToken,
     ) -> Result<Vec<DomainRecord>, CoreError>;
 
-    async fn remove_custom_domain(
+    async fn remove_domain(
         &self,
         session_token: &SessionToken,
         domain: &str,
     ) -> Result<(), CoreError>;
 
-    // ── Phase 7: alias directory (public read, signed write) ───
+    // ── Alias directory (public read, signed write) ────────────
 
     async fn publish_alias_pubkey(
         &self,
@@ -304,17 +304,17 @@ pub trait HubControlPlane: Send + Sync {
         namespace: &str,
     ) -> Result<(), CoreError>;
 
-    // ── Phase 7: per-alias inbound queue (shape A) ─────────────
+    // ── Per-alias inbound queue (shape A) ──────────────────────
 
-    /// Push a relay-side encrypted envelope into the addressee's
-    /// per-alias FIFO. Hub verifies `sig_relay` against the
-    /// registered relay pubkey; on unknown alias returns a
-    /// silent-drop ack (`RelayPushAck { received: false }`)
+    /// Push an mx-relay-side encrypted envelope into the addressee's
+    /// per-alias FIFO. Hub verifies `sig_mx_relay` against the
+    /// registered mx-relay pubkey; on unknown alias returns a
+    /// silent-drop ack (`MxRelayPushAck { received: false }`)
     /// without logging the address.
-    async fn relay_push_inbound(
+    async fn mx_relay_push_inbound(
         &self,
-        push: SignedRelayPush,
-    ) -> Result<RelayPushAck, CoreError>;
+        push: SignedMxRelayPush,
+    ) -> Result<MxRelayPushAck, CoreError>;
 
     /// Authenticated fetch of envelopes since `since_seq`
     /// (exclusive). Empty result if no new mail.
@@ -336,20 +336,23 @@ pub trait HubControlPlane: Send + Sync {
         up_to_seq: u64,
     ) -> Result<(), CoreError>;
 
-    // ── Phase 7: relay identity registration ───────────────────
+    // ── Mx-relay identity registration ─────────────────────────
 
-    /// Operator-only. Registers a relay's ML-DSA-65 pubkey so
-    /// the hub will accept its [`relay_push_inbound`] calls.
-    /// Restricted to admin sessions in production; the
-    /// in-memory backend currently allows any session.
-    async fn register_relay_identity(
+    /// Admin-only. Registers an mx-relay's ML-DSA-65 pubkey so the
+    /// hub will accept its [`mx_relay_push_inbound`] calls. The
+    /// `MxRelayId` the hub indexes under is derived deterministically
+    /// from the pubkey via [`MxRelayId::from_pubkey`] — both sides
+    /// compute it independently; nothing comes back over the wire.
+    /// Restricted to admin sessions in production; the in-memory
+    /// backend currently allows any session.
+    async fn register_mx_relay_identity(
         &self,
         session_token: &SessionToken,
-        req: RegisterRelayRequest,
-    ) -> Result<RegisterRelayResponse, CoreError>;
+        req: RegisterMxRelayRequest,
+    ) -> Result<(), CoreError>;
 
-    async fn lookup_relay_pubkey(
+    async fn lookup_mx_relay_pubkey(
         &self,
-        relay_id: &RelayId,
+        mx_relay_id: &MxRelayId,
     ) -> Result<crate::crypto::pq::MlDsa65PublicKey, CoreError>;
 }

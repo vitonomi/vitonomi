@@ -37,8 +37,8 @@ use crate::protocol::wire::domains::{
 use crate::protocol::wire::login::{
     LoginFinishRequest, LoginFinishResponse, LoginStartRequest, LoginStartResponse,
 };
-use crate::protocol::wire::relay_push::{
-    RegisterRelayRequest, RegisterRelayResponse, RelayId, RelayPushAck, SignedRelayPush,
+use crate::protocol::wire::mx_relay_push::{
+    MxRelayId, MxRelayPushAck, RegisterMxRelayRequest, SignedMxRelayPush,
 };
 use crate::protocol::wire::subdomains::SubdomainDirectoryEntry;
 use crate::record::RecordId;
@@ -55,17 +55,17 @@ struct HubState {
     /// Open invites — keyed by `invite_nonce`, value is the stored
     /// outer summary. Hub uses these for replay defense + admission.
     invite_outers: HashMap<Vec<u8>, crate::protocol::wire::accept::InviteOuterSummary>,
-    // ── Phase 7 collections ──────────────────────────────────
+    // ── Subdomains, domains, aliases, mx-relays ────────────────
     /// `(base_domain, subdomain) → claim record + owner`.
     /// Tombstoned subdomains live in `tombstoned_subdomains`.
     subdomains: HashMap<(String, Subdomain), SubdomainSlot>,
     tombstoned_subdomains: HashMap<(String, Subdomain), u64>,
-    /// `(user_id, domain) → custom-domain record`.
-    custom_domains: HashMap<(UserId, String), CustomDomainSlot>,
+    /// `(user_id, domain) → DNS-verified domain record`.
+    domains: HashMap<(UserId, String), DomainSlot>,
     /// `(alias_handle, namespace) → AliasDirectoryEntry`.
     alias_directory: HashMap<(String, String), AliasDirectoryEntry>,
-    /// `relay_id → registration`.
-    relay_pubkeys: HashMap<RelayId, RelayRegistration>,
+    /// `mx_relay_id → registration`.
+    mx_relay_pubkeys: HashMap<MxRelayId, MxRelayRegistration>,
     /// Per-alias monotonic FIFO of inbound envelopes.
     inbound_queues: HashMap<RecordId, Vec<InboundEnvelope>>,
     /// Per-alias high-water mark — the seq the client has acked.
@@ -81,13 +81,13 @@ struct SubdomainSlot {
     claimed_at_ms: u64,
 }
 
-struct CustomDomainSlot {
+struct DomainSlot {
     status: DomainStatus,
     challenge: [u8; 32],
     verified_at_ms: Option<u64>,
 }
 
-struct RelayRegistration {
+struct MxRelayRegistration {
     pubkey: MlDsa65PublicKey,
     allowed_namespaces: Vec<String>,
 }
@@ -836,7 +836,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
         Ok(())
     }
 
-    // ── Phase 7: subdomains ────────────────────────────────────
+    // ── Subdomains (managed-base namespaces) ───────────────────
 
     async fn claim_subdomain(
         &self,
@@ -953,9 +953,9 @@ impl HubControlPlane for InMemoryHubControlPlane {
         Ok(vec!["vito.gg".into()])
     }
 
-    // ── Phase 7: custom domains ────────────────────────────────
+    // ── User-owned domains (DNS-verified) ──────────────────────
 
-    async fn add_custom_domain(
+    async fn add_domain(
         &self,
         session_token: &SessionToken,
         domain: &str,
@@ -964,7 +964,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
         let session = self.lookup_session(&state, session_token)?;
         let user_id = session.user_id;
         let key = (user_id, domain.to_string());
-        if state.custom_domains.contains_key(&key) {
+        if state.domains.contains_key(&key) {
             return Err(CoreError::Validation(
                 crate::errors::ValidationError::Other(format!("domain.already_added: {domain}")),
             ));
@@ -973,9 +973,9 @@ impl HubControlPlane for InMemoryHubControlPlane {
         let bytes =
             random_bytes(32).map_err(|e| CoreError::Crypto(CryptoError::Random(e.to_string())))?;
         challenge.copy_from_slice(&bytes);
-        state.custom_domains.insert(
+        state.domains.insert(
             key,
-            CustomDomainSlot {
+            DomainSlot {
                 status: DomainStatus::Pending,
                 challenge,
                 verified_at_ms: None,
@@ -987,7 +987,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
         })
     }
 
-    async fn verify_custom_domain(
+    async fn verify_domain(
         &self,
         session_token: &SessionToken,
         domain: &str,
@@ -1000,7 +1000,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
         let session = self.lookup_session(&state, session_token)?;
         let user_id = session.user_id;
         let key = (user_id, domain.to_string());
-        let slot = state.custom_domains.get_mut(&key).ok_or_else(|| {
+        let slot = state.domains.get_mut(&key).ok_or_else(|| {
             CoreError::Validation(crate::errors::ValidationError::Other(format!(
                 "domain.not_found: {domain}"
             )))
@@ -1014,7 +1014,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
         })
     }
 
-    async fn list_custom_domains(
+    async fn list_domains(
         &self,
         session_token: &SessionToken,
     ) -> Result<Vec<DomainRecord>, CoreError> {
@@ -1022,7 +1022,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
         let session = self.lookup_session(&state, session_token)?;
         let user_id = session.user_id;
         Ok(state
-            .custom_domains
+            .domains
             .iter()
             .filter(|((u, _), _)| *u == user_id)
             .map(|((_, d), s)| DomainRecord {
@@ -1033,7 +1033,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
             .collect())
     }
 
-    async fn remove_custom_domain(
+    async fn remove_domain(
         &self,
         session_token: &SessionToken,
         domain: &str,
@@ -1041,11 +1041,11 @@ impl HubControlPlane for InMemoryHubControlPlane {
         let mut state = self.state.lock().unwrap();
         let session = self.lookup_session(&state, session_token)?;
         let user_id = session.user_id;
-        state.custom_domains.remove(&(user_id, domain.to_string()));
+        state.domains.remove(&(user_id, domain.to_string()));
         Ok(())
     }
 
-    // ── Phase 7: alias directory ───────────────────────────────
+    // ── Alias directory ────────────────────────────────────────
 
     async fn publish_alias_pubkey(
         &self,
@@ -1060,17 +1060,10 @@ impl HubControlPlane for InMemoryHubControlPlane {
         // here; production code wires it via the trait
         // helpers above.
         let _ = session;
-        // Verify the user's signature over the entry. The
-        // signed bytes are the deterministic CBOR of (alias_handle,
-        // namespace, alias_id, alias_kem_pubkey). Mirrors the
-        // SubdomainClaim verify flow.
-        let signed = (
-            &entry.alias_handle,
-            &entry.namespace,
-            &entry.alias_id,
-            &entry.alias_kem_pubkey,
-        );
-        let msg = cbor_to_vec(&signed).map_err(CoreError::Protocol)?;
+        // Verify the user's signature over the entry. Both sides
+        // use the canonical `AliasDirectoryEntry::signed_bytes`
+        // helper so the recipe stays in lockstep.
+        let msg = entry.signed_bytes().map_err(CoreError::Protocol)?;
         ml_dsa_65_verify(&entry.user_identity_pubkey, &entry.sig_user, &msg)
             .map_err(|_| {
                 CoreError::Protocol(crate::errors::ProtocolError::Malformed(
@@ -1113,21 +1106,21 @@ impl HubControlPlane for InMemoryHubControlPlane {
         Ok(())
     }
 
-    // ── Phase 7: per-alias inbound queue (shape A) ─────────────
+    // ── Per-alias inbound queue (shape A) ──────────────────────
 
-    async fn relay_push_inbound(
+    async fn mx_relay_push_inbound(
         &self,
-        push: SignedRelayPush,
-    ) -> Result<RelayPushAck, CoreError> {
+        push: SignedMxRelayPush,
+    ) -> Result<MxRelayPushAck, CoreError> {
         let mut state = self.state.lock().unwrap();
-        // 1. Verify the relay's signature.
-        let registration = state.relay_pubkeys.get(&push.relay_id).ok_or_else(|| {
+        // 1. Verify the mx relay's signature.
+        let registration = state.mx_relay_pubkeys.get(&push.mx_relay_id).ok_or_else(|| {
             CoreError::Auth(AuthError::Forbidden)
         })?;
         let signed = push.signed_bytes().map_err(CoreError::Protocol)?;
-        ml_dsa_65_verify(&registration.pubkey, &push.sig_relay, &signed).map_err(|_| {
+        ml_dsa_65_verify(&registration.pubkey, &push.sig_mx_relay, &signed).map_err(|_| {
             CoreError::Protocol(crate::errors::ProtocolError::Malformed(
-                "relay_push: sig_relay invalid".into(),
+                "mx_relay_push: sig_mx_relay invalid".into(),
             ))
         })?;
         // 2. Resolve alias from the directory.
@@ -1138,7 +1131,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
             .cloned();
         let Some(entry) = entry else {
             // Silent drop — no log of the alias address.
-            return Ok(RelayPushAck { received: false });
+            return Ok(MxRelayPushAck { received: false });
         };
         let alias_id = entry.alias_id;
         // 3. Append to the per-alias FIFO under a fresh seq.
@@ -1158,7 +1151,7 @@ impl HubControlPlane for InMemoryHubControlPlane {
             .entry(alias_id)
             .or_insert_with(Vec::new)
             .push(envelope);
-        Ok(RelayPushAck { received: true })
+        Ok(MxRelayPushAck { received: true })
     }
 
     async fn fetch_alias_inbox(
@@ -1191,44 +1184,43 @@ impl HubControlPlane for InMemoryHubControlPlane {
         Ok(())
     }
 
-    // ── Phase 7: relay identity registration ───────────────────
+    // ── Mx-relay identity registration ─────────────────────────
 
-    async fn register_relay_identity(
+    async fn register_mx_relay_identity(
         &self,
         session_token: &SessionToken,
-        req: RegisterRelayRequest,
-    ) -> Result<RegisterRelayResponse, CoreError> {
+        req: RegisterMxRelayRequest,
+    ) -> Result<(), CoreError> {
         let mut state = self.state.lock().unwrap();
         let _ = self.lookup_session(&state, session_token)?;
         // Production gates this on an admin role; in-memory
         // backend is permissive (any session can register).
-        let mut relay_id_bytes = [0u8; 16];
-        let bytes =
-            random_bytes(16).map_err(|e| CoreError::Crypto(CryptoError::Random(e.to_string())))?;
-        relay_id_bytes.copy_from_slice(&bytes);
-        let relay_id = RelayId(relay_id_bytes);
-        state.relay_pubkeys.insert(
-            relay_id,
-            RelayRegistration {
-                pubkey: req.relay_pubkey,
+        // `MxRelayId` derives deterministically from the pubkey —
+        // both sides compute the same value, so the mx relay never
+        // has to learn it from a hub response.
+        let mx_relay_id = MxRelayId::from_pubkey(&req.mx_relay_pubkey);
+        state.mx_relay_pubkeys.insert(
+            mx_relay_id,
+            MxRelayRegistration {
+                pubkey: req.mx_relay_pubkey,
                 allowed_namespaces: req.allowed_namespaces,
             },
         );
-        Ok(RegisterRelayResponse { relay_id })
+        Ok(())
     }
 
-    async fn lookup_relay_pubkey(
+    async fn lookup_mx_relay_pubkey(
         &self,
-        relay_id: &RelayId,
+        mx_relay_id: &MxRelayId,
     ) -> Result<MlDsa65PublicKey, CoreError> {
         let state = self.state.lock().unwrap();
         state
-            .relay_pubkeys
-            .get(relay_id)
+            .mx_relay_pubkeys
+            .get(mx_relay_id)
             .map(|r| r.pubkey.clone())
             .ok_or_else(|| {
                 CoreError::Validation(crate::errors::ValidationError::Other(
-                    "relay.not_found".into(),
+                    "mx_relay.not_found".into(),
                 ))
             })
     }

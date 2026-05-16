@@ -82,7 +82,7 @@ clients/            ← client surfaces
   mobile/           ← React Native iOS+Android — v1.1+ (not scaffolded yet)
   ext/              ← browser extensions — v1.1+ (not scaffolded yet)
 docs/               ← api-spec.yaml, data-format.md, protocol.md, self-hosting.md
-tests/              ← top-level workspace integration tests (mini_mvp_integration.rs etc.)
+tests/              ← top-level workspace integration tests (cluster_bootstrap_e2e.rs etc.)
 ```
 
 ## Commands

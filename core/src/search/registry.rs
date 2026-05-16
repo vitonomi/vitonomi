@@ -3,10 +3,10 @@
 //!
 //! The `match` on [`RecordType`] is exhaustive over the closed
 //! enum. Adding a new RecordType means adding one match arm here
-//! at the same time as bumping `RecordType::from_u8`. Phase 6
-//! wires only `Credential`; `Alias` / `AliasMessage` arms return
-//! a typed error explaining they're not implemented yet — Phase 7
-//! fills them in.
+//! at the same time as bumping `RecordType::from_u8`. Arms for
+//! record types without an indexer yet return a typed
+//! `ProtocolError::Malformed` so callers can surface a clear
+//! "type X not yet indexable" error.
 
 use crate::errors::ProtocolError;
 use crate::record::{RecordId, RecordType};
@@ -24,8 +24,8 @@ use crate::types::domain::DomainMetadata;
 /// # Errors
 ///
 /// `ProtocolError::Malformed` for record types that have no
-/// indexer wired yet (Phase 7 adds `Alias` / `AliasMessage`).
-/// Otherwise any decode error from the per-type implementation.
+/// indexer wired yet. Otherwise any decode error from the
+/// per-type implementation.
 pub fn index_metadata(
     rt: RecordType,
     record_id: RecordId,

@@ -23,9 +23,9 @@ use crate::search::{Indexable, SearchHit};
 use crate::types::FormatVersion;
 
 /// SPF / DKIM / DMARC outcome for an inbound message. Captured
-/// once at the relay's RCPT / DATA boundary and stored on the
+/// once at the mx relay's RCPT / DATA boundary and stored on the
 /// metadata so the user can filter / display without trusting
-/// the relay to repeat the validation.
+/// the mx relay to repeat the validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ValidationOutcome {
@@ -53,14 +53,14 @@ pub struct AliasMessageMetadata {
     pub sender: String,
     /// Decoded `Subject:` header. May be empty.
     pub subject: String,
-    /// Server-side receive timestamp (relay's clock at the
+    /// Server-side receive timestamp (mx relay's clock at the
     /// moment DATA finished).
     pub received_at_ms: u64,
     /// Total size of the encrypted message body in bytes.
     pub size_bytes: u64,
     /// First few characters of the plaintext body, capped to
-    /// 140 chars by the relay so the inbox UI can show a
-    /// preview without decrypting. The relay computes the
+    /// 140 chars by the mx relay so the inbox UI can show a
+    /// preview without decrypting. The mx relay computes the
     /// snippet from the plaintext while it's still in RAM and
     /// drops the rest.
     pub snippet: String,

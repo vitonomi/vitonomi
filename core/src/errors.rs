@@ -84,9 +84,9 @@ pub enum ValidationError {
     SubdomainReserved(String),
     /// **Privacy invariant** violation: the user attempted to
     /// claim a subdomain whose normalised string equals their
-    /// own `username`. Phase 7 enforces this client-side only —
-    /// the hub does not re-check (preserves zero-knowledge-of-
-    /// username). See `docs/threat-model.md#relaxed_posture.
+    /// own `username`. Enforced client-side only — the hub does
+    /// not re-check (preserves zero-knowledge-of-username). See
+    /// `docs/threat-model.md#relaxed_posture.
     /// client_side_username_check_only`.
     #[error("subdomain.equals_username: claimed subdomain must not equal the user's username")]
     SubdomainEqualsUsername,

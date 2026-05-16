@@ -77,7 +77,7 @@ pub async fn run(
     // 5. Open the K2 seal: derive KEK from invite_kek_secret +
     //    invite_nonce, AEAD-open sealed_cluster_key, persist
     //    cluster_shared_key locally for chain inner unseal + record
-    //    sealing in Phase 1+.
+    //    sealing.
     let cluster_shared_key = unseal_cluster_shared_key(&token.invite_nonce, &token.inner)
         .context("open sealed_cluster_key from invite (K2)")?;
     crate::cluster_key::store(&cfg.paths.data_dir, &cluster_shared_key)

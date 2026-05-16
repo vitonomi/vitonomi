@@ -7,8 +7,8 @@
 //!
 //! Optional `/vitonomi/auth/1.0.0` types ([`AuthFrame`] / [`AuthAck`])
 //! are defined for a future session-handle path (v1.1 — amortises the
-//! ML-DSA signature cost across many ops). Slice 3 ships only the
-//! per-op-signature variant.
+//! ML-DSA signature cost across many ops). Today only the
+//! per-op-signature variant is wired.
 //!
 //! All frames are deterministic CBOR (consistent with the existing
 //! `BusFrame` style under `wire::vault_bus`).

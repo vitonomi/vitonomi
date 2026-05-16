@@ -8,9 +8,9 @@
 //! [`registry::index_metadata`] dispatches on
 //! [`RecordType`] and decodes via the per-type implementation.
 //!
-//! In Phase 6 the index is in-memory and rebuilt on each session
-//! via [`LibraryIndex::populate`]; persistence to encrypted local
-//! storage lands in Phase 8.
+//! Today the index is in-memory and rebuilt on each session via
+//! [`LibraryIndex::populate`]; persistence to encrypted local
+//! storage is future-work.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -67,8 +67,8 @@ pub trait Indexable: Sized {
     fn tokens(&self) -> Vec<Cow<'_, str>>;
 
     /// `(key, value)` filter pairs (folder, tag, …). Stored
-    /// alongside the doc; not used by the simple Phase 6 search but
-    /// available to UI layers and to future facet queries.
+    /// alongside the doc; unused by the current substring search
+    /// but available to UI layers and future facet queries.
     fn filter_keys(&self) -> Vec<(&'static str, Cow<'_, str>)>;
 
     /// Build the [`SearchHit`] returned for this doc when it
@@ -208,7 +208,7 @@ impl LibraryIndex {
         for tok in normalized {
             postings.postings.entry(tok).or_default().push(new_idx);
         }
-        let _ = doc.filter_keys; // reserved for facet queries (Phase 8+)
+        let _ = doc.filter_keys; // TODO: future-work — facet queries
         Ok(())
     }
 
@@ -238,9 +238,8 @@ impl LibraryIndex {
 
     /// Run `q`, returning up to `q.limit` hits sorted by score
     /// descending. Empty query text returns an empty result set
-    /// (Phase 6 doesn't have a "browse all" mode at this layer —
-    /// callers use `RecordStore::list_metadata` directly for
-    /// that).
+    /// (no "browse all" mode at this layer — callers use
+    /// `RecordStore::list_metadata` directly for that).
     #[must_use]
     pub fn search(&self, q: &LibraryQuery) -> Vec<SearchHit> {
         let query_tokens: Vec<String> = tokenize(&q.text);
@@ -437,11 +436,10 @@ mod tests {
 
     #[test]
     fn filtered_query_skips_other_record_types() {
-        // Phase 6 only wires Credential indexing; constructing the
-        // filter HashSet with just Credential is the universal
-        // case here. We additionally test that an explicit filter
-        // for {Alias} (a type with no docs) returns zero hits even
-        // when credentials match.
+        // Construct the filter HashSet with just Credential and
+        // assert the universal-case match. Then add a filter for
+        // {Alias} (a type with no docs in this fixture) and assert
+        // zero hits even when credentials match.
         let mut idx = LibraryIndex::new();
         let _ = add(&mut idx, 1, &cm("GitHub", None, &[], None));
         let only_alias: HashSet<RecordType> = [RecordType::Alias].into_iter().collect();

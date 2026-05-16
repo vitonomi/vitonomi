@@ -5,8 +5,8 @@
 //! (in [`super::testing`]) implements the same surface with
 //! in-process channels for tests.
 //!
-//! When the libp2p-rs spike completes (PROJECT.md Phase 3), a
-//! `Libp2pVaultBus` slots in here without changing any caller.
+//! A `Libp2pVaultBus` implementation will slot in here without
+//! changing any caller once the libp2p-rs data plane lands.
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
