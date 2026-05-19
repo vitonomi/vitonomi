@@ -13,4 +13,5 @@ pub mod config;
 pub mod hub_client;
 pub mod p2p;
 pub mod prompts;
+pub mod secret_cache;
 pub mod state;

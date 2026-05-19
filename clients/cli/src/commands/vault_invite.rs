@@ -14,7 +14,6 @@ use sha2::{Digest, Sha256};
 use vitonomi_core::crypto::aead::{seal, AeadKey};
 use vitonomi_core::crypto::cluster_keys::{ClusterPepper, ClusterSharedKey};
 use vitonomi_core::crypto::invite_kek::{InviteKek, InviteKekSecret, SEALED_CLUSTER_KEY_AAD};
-use vitonomi_core::crypto::keyblob::decrypt_with_password;
 use vitonomi_core::crypto::pq::{ml_dsa_65_sign, MlDsa65SecretKey};
 use vitonomi_core::crypto::random::random_bytes;
 use vitonomi_core::encoding::cbor_to_vec;
@@ -27,6 +26,7 @@ use vitonomi_core::types::FormatVersion;
 use crate::config::CliConfig;
 use crate::hub_client;
 use crate::prompts::Prompts;
+use crate::secret_cache;
 use crate::state;
 
 pub struct VaultInviteArgs<'a> {
@@ -54,10 +54,9 @@ pub async fn run<P: Prompts + ?Sized>(
         .ok_or_else(|| anyhow!("no active session — run `login` first"))?;
     let _ = ClusterPepper(st.cluster_pepper.clone()); // ensure import is wired
 
-    // Re-prompt password and unseal the cluster admin sk.
-    let password = prompts.password("Admin password", false)?;
-    let secrets = decrypt_with_password(password.as_bytes(), &st.encrypted_key_blob)
-        .map_err(|e| anyhow!("decrypt key blob (wrong password?): {e}"))?;
+    // Unseal master secrets via the cache (or prompt if cold).
+    let state_dir = state_dir_of(args.state_path);
+    let secrets = secret_cache::read_or_prompt(&st, &state_dir, prompts)?;
     let admin_sk = MlDsa65SecretKey(secrets.cluster_admin.0.clone());
     let cluster_shared_key = ClusterSharedKey(secrets.cluster_shared_key.0.clone());
 
@@ -152,4 +151,11 @@ pub async fn run<P: Prompts + ?Sized>(
     eprintln!("{token_str}");
     eprintln!();
     Ok(token_str)
+}
+
+fn state_dir_of(state_path: &Path) -> std::path::PathBuf {
+    state_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }

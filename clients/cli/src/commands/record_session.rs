@@ -20,7 +20,6 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context as _};
 use libp2p::Multiaddr;
 
-use vitonomi_core::crypto::keyblob::decrypt_with_password;
 use vitonomi_core::crypto::keys::MasterSecretKeys;
 use vitonomi_core::crypto::pq::MlDsa65SecretKey;
 use vitonomi_core::record::record_store::{RecordStore, UserKeys};
@@ -31,6 +30,7 @@ use crate::config::CliConfig;
 use crate::hub_client;
 use crate::p2p::{dial_vault, load_or_generate_libp2p_key, Libp2pChunkTransport, P2pClientHandle};
 use crate::prompts::Prompts;
+use crate::secret_cache;
 use crate::state;
 
 /// Everything the caller needs to drive a record op.
@@ -69,9 +69,8 @@ pub async fn open<P: Prompts + ?Sized>(
         .session_token
         .as_ref()
         .ok_or_else(|| anyhow!("no active session — run `login` first"))?;
-    let password = prompts.password("Password", false)?;
-    let secrets = decrypt_with_password(password.as_bytes(), &st.encrypted_key_blob)
-        .map_err(|e| anyhow!("decrypt key blob (wrong password?): {e}"))?;
+    let state_dir = state_dir_of(state_path);
+    let secrets = secret_cache::read_or_prompt(&st, &state_dir, prompts)?;
     open_with_secrets(cfg, state_path, &secrets).await
 }
 

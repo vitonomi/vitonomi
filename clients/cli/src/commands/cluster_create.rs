@@ -22,6 +22,7 @@ use vitonomi_core::types::{FormatVersion, Username};
 use crate::config::CliConfig;
 use crate::hub_client;
 use crate::prompts::Prompts;
+use crate::secret_cache;
 use crate::state::{self, CliState};
 
 pub struct ClusterCreateArgs<'a> {
@@ -118,6 +119,28 @@ pub async fn run<P: Prompts + ?Sized>(
     };
     state::save(args.state_path, &cli_state)?;
 
+    // 7a. Wipe any leftover local snapshot chain — a fresh cluster
+    //     means the existing `heads/` (signed by a prior identity)
+    //     is meaningless and would break `populate` with a
+    //     PQ-signature-verification failure on the first command
+    //     that touches the chain. Also wipe the secret cache so we
+    //     don't accidentally serve another cluster's secrets.
+    let state_dir = args
+        .state_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    clear_local_chain(&state_dir);
+    let _ = secret_cache::clear(&state_dir);
+
+    // 7b. Warm the secret cache for subsequent commands.
+    let _ = secret_cache::write(
+        &state_dir,
+        &cli_state.cluster_id,
+        &secrets,
+        Some(cli_state.session_expires_at_ms),
+    );
+
     // 8. Probe + pin the hub's TLS fingerprint into cli.toml. Skipped
     //    for plain-http hubs (test path) and best-effort for https
     //    (operator can still pass --fingerprint to `vault invite`).
@@ -166,4 +189,16 @@ fn hex_lower(bytes: &[u8]) -> String {
         s.push_str(&format!("{b:02x}"));
     }
     s
+}
+
+/// Best-effort wipe of `<state_dir>/heads/`. A fresh cluster is
+/// a fresh identity, so the previous chain's signatures will no
+/// longer verify against the new `identity_pk`. Removing the dir
+/// prevents that mismatch error on the very first command after
+/// `cluster create`.
+fn clear_local_chain(state_dir: &Path) {
+    let heads = state_dir.join("heads");
+    if heads.exists() {
+        let _ = std::fs::remove_dir_all(&heads);
+    }
 }

@@ -17,7 +17,6 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context as _};
 
-use vitonomi_core::crypto::keyblob::decrypt_with_password;
 use vitonomi_core::crypto::keys::MlKem768SecretKeyBytes;
 use vitonomi_core::crypto::pq::{ml_dsa_65_sign, ml_kem_768_keypair, MlDsa65SecretKey};
 use vitonomi_core::crypto::random::random_bytes;
@@ -32,6 +31,7 @@ use crate::commands::library_session;
 use crate::config::CliConfig;
 use crate::hub_client;
 use crate::prompts::Prompts;
+use crate::secret_cache;
 use crate::state;
 
 pub struct AliasCreateArgs<'a> {
@@ -63,9 +63,9 @@ pub async fn run<P: Prompts + ?Sized>(
 
     // Unseal master secrets ONCE — used both for the record session
     // below and for signing the AliasDirectoryEntry via identity_sk.
-    let password = prompts.password("Password", false)?;
-    let secrets = decrypt_with_password(password.as_bytes(), &st.encrypted_key_blob)
-        .map_err(|e| anyhow!("decrypt key blob (wrong password?): {e}"))?;
+    // The secret_cache helper skips the prompt when the cache is hot.
+    let state_dir = state_dir_of(args.state_path);
+    let secrets = secret_cache::read_or_prompt(&st, &state_dir, prompts)?;
     let identity_sk = MlDsa65SecretKey(secrets.identity.0.clone());
     let identity_pk = vitonomi_core::crypto::pq::ml_dsa_65_signing_pubkey_from_seed(&identity_sk)
         .map_err(|e| anyhow!("derive identity pubkey: {e}"))?;
@@ -169,4 +169,11 @@ pub async fn run<P: Prompts + ?Sized>(
 
     lib.shutdown().await;
     Ok(())
+}
+
+fn state_dir_of(state_path: &Path) -> std::path::PathBuf {
+    state_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }

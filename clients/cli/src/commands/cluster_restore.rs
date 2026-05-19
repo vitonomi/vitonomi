@@ -20,6 +20,7 @@ use vitonomi_core::types::{FormatVersion, Username};
 use crate::config::CliConfig;
 use crate::hub_client;
 use crate::prompts::Prompts;
+use crate::secret_cache;
 use crate::state::{self, CliState};
 
 pub struct ClusterRestoreArgs<'a> {
@@ -124,6 +125,28 @@ pub async fn run<P: Prompts + ?Sized>(
         encrypted_key_blob: prior.encrypted_key_blob,
     };
     state::save(args.state_path, &new_state)?;
+
+    // Wipe any leftover local snapshot chain — the restored identity
+    // may not match what previously signed records on disk. Also
+    // refresh the secret cache so subsequent commands skip the
+    // password prompt.
+    let state_dir = args
+        .state_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let heads = state_dir.join("heads");
+    if heads.exists() {
+        let _ = std::fs::remove_dir_all(&heads);
+    }
+    let _ = secret_cache::clear(&state_dir);
+    let _ = secret_cache::write(
+        &state_dir,
+        &new_state.cluster_id,
+        &secrets,
+        Some(new_state.session_expires_at_ms),
+    );
+
     eprintln!("cluster restored to {}", cfg.hub.url);
     Ok(())
 }

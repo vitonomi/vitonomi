@@ -13,7 +13,6 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context as _};
 
-use vitonomi_core::crypto::keyblob::decrypt_with_password;
 use vitonomi_core::crypto::pq::{ml_dsa_65_sign, MlDsa65SecretKey};
 use vitonomi_core::protocol::wire::domains::DomainStatus;
 use vitonomi_core::record::record_store::{BodyOp, RecordPlaintext};
@@ -26,6 +25,7 @@ use crate::commands::library_session;
 use crate::config::CliConfig;
 use crate::hub_client;
 use crate::prompts::Prompts;
+use crate::secret_cache;
 use crate::state;
 
 pub struct SubdomainClaimArgs<'a> {
@@ -65,10 +65,10 @@ pub async fn run<P: Prompts + ?Sized>(
 
     // Unseal master secrets ONCE — used both to sign the claim
     // (identity_sk) and to open the record session for the Domain
-    // record write below.
-    let password = prompts.password("Password", false)?;
-    let secrets = decrypt_with_password(password.as_bytes(), &st.encrypted_key_blob)
-        .map_err(|e| anyhow!("decrypt key blob (wrong password?): {e}"))?;
+    // record write below. The secret_cache helper skips the prompt
+    // when the cache is hot.
+    let state_dir = state_dir_of(args.state_path);
+    let secrets = secret_cache::read_or_prompt(&st, &state_dir, prompts)?;
     let identity_sk = MlDsa65SecretKey(secrets.identity.0.clone());
     let identity_pk = vitonomi_core::crypto::pq::ml_dsa_65_signing_pubkey_from_seed(&identity_sk)
         .map_err(|e| anyhow!("derive identity pubkey: {e}"))?;
@@ -133,4 +133,11 @@ pub async fn run<P: Prompts + ?Sized>(
         "subdomain claimed"
     );
     Ok(())
+}
+
+fn state_dir_of(state_path: &Path) -> std::path::PathBuf {
+    state_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }

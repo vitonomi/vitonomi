@@ -16,6 +16,7 @@ use vitonomi_core::types::Username;
 use crate::config::CliConfig;
 use crate::hub_client;
 use crate::prompts::Prompts;
+use crate::secret_cache;
 use crate::state::{self, CliState};
 
 pub struct LoginArgs<'a> {
@@ -91,6 +92,20 @@ pub async fn run<P: Prompts + ?Sized>(
     existing.session_expires_at_ms = finish.session_expires_at_ms;
     existing.encrypted_key_blob = start.encrypted_key_blob;
     state::save(args.state_path, &existing)?;
+
+    // Warm the secret cache so subsequent commands within this
+    // session don't re-prompt for the password.
+    let state_dir = args
+        .state_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let _ = secret_cache::write(
+        &state_dir,
+        &existing.cluster_id,
+        &secrets,
+        Some(existing.session_expires_at_ms),
+    );
 
     eprintln!(
         "logged in: session expires at ms={}",
